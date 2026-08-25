@@ -1,0 +1,35 @@
+# One command brings up the whole system. This file is the W11 deploy in embryo.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agentlab
+      POSTGRES_PASSWORD: agentlab
+      POSTGRES_DB: agentlab
+    ports:
+      # 5433 on the host, because Homebrew postgres@16 may already own 5432.
+      - "5433:5432"
+    volumes:
+      # A named volume, not a bind mount: the data lives in Docker, survives `down`,
+      # and is destroyed only by `down -v`.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `depends_on: condition: service_healthy` is only meaningful because of this.
+      test: ["CMD-SHELL", "pg_isready -U agentlab -d agentlab"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # `db` is service DNS. Inside the network the host is the service name, never localhost.
+      DATABASE_URL: postgresql+psycopg://agentlab:agentlab@db:5432/agentlab
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
