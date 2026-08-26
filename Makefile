@@ -1,4 +1,4 @@
-.PHONY: up down logs ps psql shell test lint typecheck check migrate revision downgrade health clean
+.PHONY: up down logs ps psql shell test ingest lint typecheck check migrate revision downgrade health clean
 
 up:            ## Bring up db and api, wait for health
 	docker compose up -d --build
@@ -27,6 +27,9 @@ health:
 
 test:
 	uv run pytest
+
+ingest:        ## make ingest f=path/to/calendar.ics
+	uv run python -m agent_lab.ingest.cli calendar "$(f)"
 
 lint:
 	uv run ruff check .

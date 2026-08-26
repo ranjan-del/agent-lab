@@ -12,6 +12,8 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pgvector>=0.3",
+    "icalendar>=7.3.0",
+    "python-dateutil>=2.9.0.post0",
 ]
 
 [dependency-groups]
@@ -22,6 +24,7 @@ dev = [
     "respx>=0.21",
     "ruff>=0.16",
     "mypy>=1.13",
+    "types-python-dateutil>=2.9.0.20260807",
 ]
 
 [build-system]

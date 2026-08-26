@@ -28,7 +28,14 @@ target_metadata = Base.metadata
 
 
 def _url() -> str:
-    """Read the database URL from settings, so alembic.ini never holds a secret."""
+    """Prefer the URL alembic was configured with, else settings.
+
+    The config option is what lets a test suite point the same migrations at a throwaway
+    database. Settings stays the default so alembic.ini never holds a password.
+    """
+    configured = config.get_main_option("sqlalchemy.url", None)
+    if configured:
+        return configured
     return settings.database_url
 
 
