@@ -1,4 +1,9 @@
-.PHONY: up down logs ps psql shell test ingest transcript lint typecheck check migrate revision downgrade health clean
+.PHONY: help up down logs ps psql shell test ingest transcript lint typecheck check migrate revision downgrade health clean
+
+.DEFAULT_GOAL := help
+
+help:          ## Show this help
+	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 up:            ## Bring up db and api, wait for health
 	docker compose up -d --build
@@ -10,10 +15,10 @@ down:          ## Stop everything, keep the data
 clean:         ## Stop everything and DESTROY the database volume
 	docker compose down -v
 
-logs:
+logs:          ## Follow the logs from every service
 	docker compose logs -f
 
-ps:
+ps:            ## Show container status
 	docker compose ps
 
 psql:          ## Open a shell on the database
@@ -22,10 +27,10 @@ psql:          ## Open a shell on the database
 shell:         ## Open a shell in the api container
 	docker compose exec api bash
 
-health:
+health:        ## Curl /health and show the status code
 	@curl -s -w '\nHTTP %{http_code}\n' http://localhost:8000/health
 
-test:
+test:          ## Run the test suite
 	uv run pytest
 
 ingest:        ## make ingest f=path/to/calendar.ics
@@ -34,14 +39,14 @@ ingest:        ## make ingest f=path/to/calendar.ics
 transcript:    ## make transcript f=path/to/transcript.txt
 	uv run python -m agent_lab.ingest.cli transcript "$(f)"
 
-lint:
+lint:          ## Run ruff check and format --check
 	uv run ruff check .
 	uv run ruff format --check .
 
-typecheck:
+typecheck:     ## Run mypy --strict
 	uv run mypy
 
-check: lint typecheck test
+check: lint typecheck test   ## Run lint, types and tests together
 
 migrate:       ## Apply all migrations
 	docker compose exec api alembic upgrade head
