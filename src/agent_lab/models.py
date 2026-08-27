@@ -35,9 +35,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-# One embedding model, one dimension. Changing the model means re-embedding every chunk,
-# which is exactly why the number lives here and not scattered through the codebase.
-EMBEDDING_DIM = 1536
+# One embedding model, one dimension.
+#
+# 384 is all-MiniLM-L6-v2's output size. pgvector fixes the dimension on the column, so
+# changing the model is a migration AND a full re-embed of every stored chunk: vectors from
+# two different models are not comparable, and mixing them silently degrades retrieval rather
+# than failing. That is why the number lives here, once, and why `embedding_model` is stored
+# on every row.
+EMBEDDING_DIM = 384
 
 
 class Base(DeclarativeBase):

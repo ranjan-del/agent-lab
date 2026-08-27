@@ -33,8 +33,10 @@ def _url() -> str:
     The config option is what lets a test suite point the same migrations at a throwaway
     database. Settings stays the default so alembic.ini never holds a password.
     """
-    configured = config.get_main_option("sqlalchemy.url", None)
-    if configured:
+    configured = (config.get_main_option("sqlalchemy.url", None) or "").strip()
+    # alembic.ini ships a placeholder; an empty or placeholder value must fall through rather
+    # than be handed to SQLAlchemy, which reports it as an unloadable dialect named "driver".
+    if configured and not configured.startswith("driver://"):
         return configured
     return settings.database_url
 

@@ -12,8 +12,10 @@ import sys
 from pathlib import Path
 
 from agent_lab.db import SessionLocal
+from agent_lab.embeddings import get_embedder
 from agent_lab.ingest.runner import AlreadyIngested, ingest_events
 from agent_lab.ingest.sources import ics
+from agent_lab.ingest.transcripts import store_transcript
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,7 +28,14 @@ def main(argv: list[str] | None = None) -> int:
     cal.add_argument("--days-forward", type=int, default=60)
     cal.add_argument("--force", action="store_true", help="re-run even if the key succeeded")
 
+    tr = sub.add_parser("transcript", help="store a transcript: chunk, embed, write")
+    tr.add_argument("path", type=Path)
+    tr.add_argument("--meeting", help="external_id of the meeting this belongs to")
+    tr.add_argument("--embedder", default=None, help="local (default) or fake")
+
     args = parser.parse_args(argv)
+    if args.command == "transcript":
+        return _transcript(args)
     now = dt.datetime.now(dt.UTC)
     window_start = now - dt.timedelta(days=args.days_back)
     window_end = now + dt.timedelta(days=args.days_forward)
@@ -56,6 +65,36 @@ def main(argv: list[str] | None = None) -> int:
         f"meetings updated   : {counts.meetings_updated}\n"
         f"people created     : {counts.people_created}\n"
         f"attendees written  : {counts.attendees_written}"
+    )
+    return 0
+
+
+def _transcript(args: argparse.Namespace) -> int:
+    """Store one transcript, and report what it cost in tokens."""
+    raw_text = args.path.read_text(encoding="utf-8")
+    embedder = get_embedder(args.embedder)
+    now = dt.datetime.now(dt.UTC)
+
+    with SessionLocal() as session:
+        counts = store_transcript(
+            session,
+            raw_text=raw_text,
+            embedder=embedder,
+            now=now,
+            source=args.path.suffix.lstrip(".") or "text",
+            meeting_external_id=args.meeting,
+        )
+        session.commit()
+
+    if counts.transcripts_skipped:
+        print("skipped: this exact text is already stored (same checksum), nothing re-embedded")
+        return 0
+
+    print(
+        f"model              : {embedder.name}\n"
+        f"chunks written     : {counts.chunks_written}\n"
+        f"chunks embedded    : {counts.chunks_embedded}\n"
+        f"tokens embedded    : {counts.tokens_embedded}"
     )
     return 0
 
