@@ -1,0 +1,10 @@
+SELECT id, title FROM meetings WHERE title ILIKE '%budget review 42%';
+
+Seq Scan on meetings  (cost=0.00..4561.00 rows=10 width=23) (actual time=0.946..56.071 rows=139 loops=1)
+  Filter: (title ~~* '%budget review 42%'::text)
+  Rows Removed by Filter: 99861
+  Buffers: shared hit=3311
+Planning:
+  Buffers: shared hit=104
+Planning Time: 0.321 ms
+Execution Time: 56.132 ms

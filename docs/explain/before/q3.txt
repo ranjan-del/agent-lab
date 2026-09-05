@@ -1,0 +1,49 @@
+SELECT p.email, m.title, m.starts_at
+FROM (
+  SELECT a.person_id, a.meeting_id,
+         row_number() OVER (PARTITION BY a.person_id ORDER BY m.starts_at DESC) AS rn
+  FROM attendees a JOIN meetings m ON m.id = a.meeting_id
+) ranked
+JOIN people p ON p.id = ranked.person_id
+JOIN meetings m ON m.id = ranked.meeting_id
+WHERE ranked.rn = 1 AND p.email = 'person1000@example.com';
+
+Nested Loop  (cost=45280.37..55033.82 rows=1 width=45) (actual time=165.283..165.294 rows=1 loops=1)
+  Buffers: shared hit=5820, temp read=899 written=1255
+  ->  Merge Join  (cost=45279.96..55028.65 rows=1 width=30) (actual time=165.273..165.283 rows=1 loops=1)
+        Merge Cond: (ranked.person_id = p.id)
+        Buffers: shared hit=5816, temp read=899 written=1255
+        ->  Subquery Scan on ranked  (cost=45271.65..55016.58 rows=1499 width=16) (actual time=146.448..165.212 rows=1001 loops=1)
+              Filter: (ranked.rn = 1)
+              Buffers: shared hit=5813, temp read=899 written=1255
+              ->  WindowAgg  (cost=45271.65..51268.53 rows=299844 width=32) (actual time=146.448..165.151 rows=1001 loops=1)
+                    Run Condition: (row_number() OVER (?) <= 1)
+                    Buffers: shared hit=5813, temp read=899 written=1255
+                    ->  Sort  (cost=45271.65..46021.26 rows=299844 width=24) (actual time=146.442..158.988 rows=149361 loops=1)
+                          Sort Key: a.person_id, m_1.starts_at DESC
+                          Sort Method: external merge  Disk: 10000kB
+                          Buffers: shared hit=5813, temp read=899 written=1255
+                          ->  Hash Join  (cost=5561.00..11845.56 rows=299844 width=24) (actual time=23.885..80.165 rows=299844 loops=1)
+                                Hash Cond: (a.meeting_id = m_1.id)
+                                Buffers: shared hit=5810
+                                ->  Seq Scan on attendees a  (cost=0.00..5497.44 rows=299844 width=16) (actual time=0.002..13.316 rows=299844 loops=1)
+                                      Buffers: shared hit=2499
+                                ->  Hash  (cost=4311.00..4311.00 rows=100000 width=16) (actual time=23.786..23.787 rows=100000 loops=1)
+                                      Buckets: 131072  Batches: 1  Memory Usage: 5712kB
+                                      Buffers: shared hit=3311
+                                      ->  Seq Scan on meetings m_1  (cost=0.00..4311.00 rows=100000 width=16) (actual time=0.106..12.344 rows=100000 loops=1)
+                                            Buffers: shared hit=3311
+        ->  Sort  (cost=8.30..8.31 rows=1 width=30) (actual time=0.029..0.029 rows=1 loops=1)
+              Sort Key: p.id
+              Sort Method: quicksort  Memory: 25kB
+              Buffers: shared hit=3
+              ->  Index Scan using people_email_key on people p  (cost=0.28..8.29 rows=1 width=30) (actual time=0.022..0.023 rows=1 loops=1)
+                    Index Cond: ((email)::text = 'person1000@example.com'::text)
+                    Buffers: shared hit=3
+  ->  Index Scan using meetings_pkey on meetings m  (cost=0.42..5.17 rows=1 width=31) (actual time=0.008..0.008 rows=1 loops=1)
+        Index Cond: (id = ranked.meeting_id)
+        Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=302
+Planning Time: 0.652 ms
+Execution Time: 166.170 ms

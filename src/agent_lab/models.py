@@ -31,6 +31,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -87,6 +88,13 @@ class Meeting(Base):
         CheckConstraint("ends_at > starts_at", name="ck_meetings_ends_after_starts"),
         Index("ix_meetings_starts_at", "starts_at"),
         Index("ix_meetings_series_id", "series_id"),
+        # Overlap and containment in one probe. Only used by queries written with the same
+        # range expression; see migrations/versions/0004_meetings_span_gist.py.
+        Index(
+            "ix_meetings_span_gist",
+            text("tstzrange(starts_at, ends_at, '[)')"),
+            postgresql_using="gist",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

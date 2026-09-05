@@ -1,0 +1,37 @@
+WITH mine AS MATERIALIZED (
+  SELECT a.meeting_id FROM attendees a JOIN people p ON p.id = a.person_id
+  WHERE p.email = 'person1000@example.com'
+)
+SELECT m.title, m.starts_at FROM meetings m JOIN mine ON mine.meeting_id = m.id
+ORDER BY m.starts_at DESC LIMIT 1;
+
+Limit  (cost=1684.26..1684.26 rows=1 width=23) (actual time=0.485..0.486 rows=1 loops=1)
+  Buffers: shared hit=287
+  CTE mine
+    ->  Nested Loop  (cost=5.74..495.26 rows=150 width=8) (actual time=0.028..0.168 rows=56 loops=1)
+          Buffers: shared hit=60
+          ->  Index Scan using people_email_key on people p  (cost=0.28..8.29 rows=1 width=8) (actual time=0.009..0.009 rows=1 loops=1)
+                Index Cond: ((email)::text = 'person1000@example.com'::text)
+                Buffers: shared hit=3
+          ->  Bitmap Heap Scan on attendees a  (cost=5.46..485.47 rows=150 width=16) (actual time=0.017..0.153 rows=56 loops=1)
+                Recheck Cond: (person_id = p.id)
+                Heap Blocks: exact=55
+                Buffers: shared hit=57
+                ->  Bitmap Index Scan on ix_attendees_person_id  (cost=0.00..5.42 rows=150 width=0) (actual time=0.009..0.009 rows=56 loops=1)
+                      Index Cond: (person_id = p.id)
+                      Buffers: shared hit=2
+  ->  Sort  (cost=1189.00..1189.38 rows=150 width=23) (actual time=0.484..0.484 rows=1 loops=1)
+        Sort Key: m.starts_at DESC
+        Sort Method: top-N heapsort  Memory: 25kB
+        Buffers: shared hit=287
+        ->  Nested Loop  (cost=0.42..1188.25 rows=150 width=23) (actual time=0.046..0.466 rows=56 loops=1)
+              Buffers: shared hit=284
+              ->  CTE Scan on mine  (cost=0.00..3.00 rows=150 width=8) (actual time=0.029..0.178 rows=56 loops=1)
+                    Buffers: shared hit=60
+              ->  Index Scan using meetings_pkey on meetings m  (cost=0.42..7.90 rows=1 width=31) (actual time=0.005..0.005 rows=1 loops=56)
+                    Index Cond: (id = mine.meeting_id)
+                    Buffers: shared hit=224
+Planning:
+  Buffers: shared hit=366
+Planning Time: 0.533 ms
+Execution Time: 0.509 ms

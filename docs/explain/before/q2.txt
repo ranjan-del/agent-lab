@@ -1,0 +1,15 @@
+SELECT count(*)
+FROM meetings
+WHERE starts_at < timestamptz '2026-03-10 12:00+00'
+  AND ends_at   > timestamptz '2026-03-10 09:00+00';
+
+Aggregate  (cost=4871.65..4871.66 rows=1 width=8) (actual time=10.927..10.928 rows=1 loops=1)
+  Buffers: shared hit=3311
+  ->  Seq Scan on meetings  (cost=0.00..4811.00 rows=24262 width=0) (actual time=1.287..10.921 rows=25 loops=1)
+        Filter: ((starts_at < '2026-03-10 12:00:00+00'::timestamp with time zone) AND (ends_at > '2026-03-10 09:00:00+00'::timestamp with time zone))
+        Rows Removed by Filter: 99975
+        Buffers: shared hit=3311
+Planning:
+  Buffers: shared hit=123
+Planning Time: 0.200 ms
+Execution Time: 10.965 ms

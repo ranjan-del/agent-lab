@@ -1,0 +1,16 @@
+SELECT count(*) FROM meetings
+WHERE tstzrange(starts_at, ends_at, '[)') && tstzrange(timestamptz '2026-03-10 09:00+00', timestamptz '2026-03-10 12:00+00', '[)');
+
+Aggregate  (cost=2197.95..2197.96 rows=1 width=8) (actual time=0.167..0.168 rows=1 loops=1)
+  Buffers: shared hit=28
+  ->  Bitmap Heap Scan on meetings  (cost=40.03..2195.45 rows=1000 width=0) (actual time=0.090..0.163 rows=25 loops=1)
+        Recheck Cond: (tstzrange(starts_at, ends_at, '[)'::text) && '["2026-03-10 09:00:00+00","2026-03-10 12:00:00+00")'::tstzrange)
+        Heap Blocks: exact=25
+        Buffers: shared hit=28
+        ->  Bitmap Index Scan on ix_meetings_span_gist  (cost=0.00..39.78 rows=1000 width=0) (actual time=0.081..0.081 rows=25 loops=1)
+              Index Cond: (tstzrange(starts_at, ends_at, '[)'::text) && '["2026-03-10 09:00:00+00","2026-03-10 12:00:00+00")'::tstzrange)
+              Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=132
+Planning Time: 0.294 ms
+Execution Time: 0.189 ms
