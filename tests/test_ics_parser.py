@@ -64,6 +64,49 @@ def test_recurrence_respects_dst_not_a_fixed_utc_offset(tmp_path: Path) -> None:
     assert utc_hours == [14, 14, 15, 15, 15, 15], utc_hours
 
 
+def _parse_year(tmp_path: Path, body: str) -> dict[str, object]:
+    """Parse with a window covering all of 2026, keyed by UID (the external id is UID_instant)."""
+    path = tmp_path / "cal.ics"
+    path.write_text(body)
+    start = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+    end = dt.datetime(2027, 1, 1, tzinfo=dt.UTC)
+    return {e.external_id.rsplit("_", 1)[0]: e for e in ics.parse(path, start, end)}
+
+
+def test_a_meeting_spanning_the_fall_back_hour_is_three_hours_not_two(tmp_path: Path) -> None:
+    """01:30 to 03:30 on the night clocks go back is three real hours.
+
+    The stored instants must be the moments the meeting actually occupied, not the wall-clock
+    difference. 01:30 exists twice that night; the first one (EDT) is the one the source meant.
+    """
+    event = _parse_year(tmp_path, ics_fixtures.DST_BOUNDARY_NIGHTS)["fall-back-span"]
+    assert event.starts_at == dt.datetime(2026, 11, 1, 5, 30, tzinfo=dt.UTC)
+    assert event.ends_at == dt.datetime(2026, 11, 1, 8, 30, tzinfo=dt.UTC)
+    assert event.ends_at - event.starts_at == dt.timedelta(hours=3)
+
+
+def test_a_meeting_starting_in_the_spring_gap_is_one_hour_not_two(tmp_path: Path) -> None:
+    """02:30 to 04:30 on the night clocks jump forward is one real hour.
+
+    02:30 never happens. It resolves with the offset in force before the jump (-05:00), which
+    is the same instant as 03:30 EDT, so the meeting starts an hour "late" and is an hour
+    shorter than the calendar shows. That is a fact about the meeting, not a parsing error.
+    """
+    event = _parse_year(tmp_path, ics_fixtures.DST_BOUNDARY_NIGHTS)["spring-gap-start"]
+    assert event.starts_at == dt.datetime(2026, 3, 8, 7, 30, tzinfo=dt.UTC)
+    assert event.ends_at == dt.datetime(2026, 3, 8, 8, 30, tzinfo=dt.UTC)
+    assert event.ends_at - event.starts_at == dt.timedelta(hours=1)
+
+
+def test_a_meeting_that_collapses_to_zero_in_the_spring_gap_is_dropped(tmp_path: Path) -> None:
+    """02:30 to 03:30 across the jump is the same instant twice, and cannot be stored.
+
+    Characterisation, not endorsement: the parser drops it silently, the same way it drops an
+    event with no DTEND. A count of skipped events would make this visible; see the log.
+    """
+    assert "spring-gap-collapsed" not in _parse_year(tmp_path, ics_fixtures.DST_BOUNDARY_NIGHTS)
+
+
 def test_exdate_removes_an_occurrence_and_recurrence_id_moves_one(tmp_path: Path) -> None:
     events = sorted(
         _parse(tmp_path, ics_fixtures.SERIES_WITH_EXCEPTIONS), key=lambda e: e.starts_at

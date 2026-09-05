@@ -106,3 +106,37 @@ SUMMARY:Public holiday
 END:VEVENT
 END:VCALENDAR
 """
+
+# Two single meetings that sit ON the two New York DST transitions of 2026, plus one that the
+# transition collapses. Wall-clock arithmetic gets every one of them wrong:
+#
+# * 1 Nov, clocks fall back 02:00 EDT -> 01:00 EST. "01:30 to 03:30" reads as two hours but
+#   is three: 01:30 EDT (05:30Z) to 03:30 EST (08:30Z). 01:30 also happens TWICE that night;
+#   RFC 5545 and zoneinfo resolve the ambiguous time to the FIRST occurrence (EDT).
+# * 8 Mar, clocks spring forward 02:00 EST -> 03:00 EDT. "02:30 to 04:30" reads as two hours
+#   but is one: 02:30 does not exist and resolves with the pre-transition offset (-05:00),
+#   which is 07:30Z, the same instant as 03:30 EDT. The end, 04:30 EDT, is 08:30Z.
+# * 8 Mar, "02:30 to 03:30" collapses to a zero-length instant (07:30Z to 07:30Z).
+DST_BOUNDARY_NIGHTS = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:fall-back-span
+DTSTART;TZID=America/New_York:20261101T013000
+DTEND;TZID=America/New_York:20261101T033000
+SUMMARY:Overnight incident review
+END:VEVENT
+BEGIN:VEVENT
+UID:spring-gap-start
+DTSTART;TZID=America/New_York:20260308T023000
+DTEND;TZID=America/New_York:20260308T043000
+SUMMARY:Starts inside the missing hour
+END:VEVENT
+BEGIN:VEVENT
+UID:spring-gap-collapsed
+DTSTART;TZID=America/New_York:20260308T023000
+DTEND;TZID=America/New_York:20260308T033000
+SUMMARY:Exactly the missing hour
+END:VEVENT
+END:VCALENDAR
+"""
