@@ -20,3 +20,19 @@ class FakeSession:
 
     def scalar_one_or_none(self) -> str | None:
         return self.vector_version
+
+
+class ScriptedModel:
+    """A model that returns pre-written replies in order and counts its calls."""
+
+    def __init__(self, replies: list) -> None:
+        self._replies = list(replies)
+        self.calls = 0
+        self.seen_messages: list = []
+
+    def complete(self, messages: list, tools: list):
+        self.calls += 1
+        self.seen_messages.append(list(messages))
+        if not self._replies:
+            raise AssertionError("ScriptedModel ran out of replies")
+        return self._replies.pop(0)
