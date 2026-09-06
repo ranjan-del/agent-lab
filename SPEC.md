@@ -92,5 +92,13 @@ Until then the agent produces the list of things to send and I send them.
 
 ## 8. The five design decisions you expect to defend
 
-<!-- For each: the alternative you rejected, and why. One of them is already made:
-     the policy engine is deterministic Python, not a prompt. Write down why. -->
+1. **The loop is hand-rolled, not a framework.** Forty lines: call the model, run the tools
+   it asked for, feed results back, repeat. Two weeks of owning this before adopting anything,
+   so that when a framework is considered the question "what does it buy" has an answer.
+2. **Tool failures fail open to the model.** An unknown tool name, arguments that fail the
+   schema, or a tool that raises all become a result the model reads, never an exception that
+   ends the run. The model is the party that can repair its own mistake. The rejected
+   alternative, failing closed, turns one hallucinated argument into a dead run. The step
+   limit is what bounds a permanently broken tool, and it is not optional.
+
+<!-- Three more decisions go here as they are made. -->
