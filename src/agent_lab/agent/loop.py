@@ -19,9 +19,15 @@ def run(
     tools: list[Tool],
     max_steps: int,
     on_step: Callable[[Step], None] | None = None,
+    system: str | None = None,
 ) -> RunResult:
     by_name = {t.name: t for t in tools}
-    messages: list[dict[str, Any]] = [{"role": "user", "content": task}]
+    # The system prompt goes first and never changes within a run, so a provider that caches
+    # prompt prefixes can reuse it on every turn. Everything that varies comes after.
+    messages: list[dict[str, Any]] = []
+    if system is not None:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": task})
     steps: list[Step] = []
 
     for _ in range(max_steps):

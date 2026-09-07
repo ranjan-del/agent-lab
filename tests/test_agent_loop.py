@@ -191,3 +191,23 @@ def test_a_tool_that_raises_becomes_an_error_result_not_a_crash() -> None:
         and "ConnectionError" in err["error"]
         and "database unreachable" in err["error"]
     )
+
+
+def test_the_system_prompt_is_the_first_message_on_every_model_call() -> None:
+    """Fixed text first so a provider can cache it; the task and everything after it vary."""
+    model = ScriptedModel(
+        [
+            ModelReply(
+                text=None,
+                tool_calls=(ToolCall(name="nope", arguments={}, id="c"),),
+                usage=Usage(5, 1),
+            ),
+            ModelReply(text="ok", tool_calls=(), usage=Usage(6, 1)),
+        ]
+    )
+
+    run(task="hello", model=model, tools=[], max_steps=3, system="You are the calendar agent.")
+
+    for call in model.seen_messages:
+        assert call[0] == {"role": "system", "content": "You are the calendar agent."}
+        assert call[1] == {"role": "user", "content": "hello"}
