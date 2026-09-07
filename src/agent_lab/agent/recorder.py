@@ -37,25 +37,27 @@ def cost_usd(steps: list[Step], model_name: str) -> Decimal | None:
     return (tokens_in * prices[0] + tokens_out * prices[1]) / million
 
 
-def record_run(
-    session: Session,
-    *,
-    task: str,
-    result: RunResult,
-    model_name: str,
-    started_at: dt.datetime,
-    finished_at: dt.datetime,
-) -> AgentRun:
-    run = AgentRun(
-        task=task,
-        started_at=started_at,
-        finished_at=finished_at,
-        outcome=result.outcome,
-        cost_usd=cost_usd(result.steps, model_name),
-        latency_ms=int((finished_at - started_at).total_seconds() * 1000),
-    )
+def start_run(session: Session, *, task: str, started_at: dt.datetime) -> AgentRun:
+    """Open the run row before the loop starts, so tools can stamp what they write with its id."""
+    run = AgentRun(task=task, started_at=started_at)
     session.add(run)
     session.flush()
+    return run
+
+
+def finish_run(
+    session: Session,
+    run: AgentRun,
+    *,
+    result: RunResult,
+    model_name: str,
+    finished_at: dt.datetime,
+) -> AgentRun:
+    run.finished_at = finished_at
+    run.outcome = result.outcome
+    cost = cost_usd(result.steps, model_name)
+    run.cost_usd = None if cost is None else float(cost)
+    run.latency_ms = int((finished_at - run.started_at).total_seconds() * 1000)
     for step in result.steps:
         session.add(
             RunStep(
@@ -72,6 +74,20 @@ def record_run(
         )
     session.flush()
     return run
+
+
+def record_run(
+    session: Session,
+    *,
+    task: str,
+    result: RunResult,
+    model_name: str,
+    started_at: dt.datetime,
+    finished_at: dt.datetime,
+) -> AgentRun:
+    """Write a run that already finished. execute() uses start_run and finish_run instead."""
+    run = start_run(session, task=task, started_at=started_at)
+    return finish_run(session, run, result=result, model_name=model_name, finished_at=finished_at)
 
 
 def _jsonable(value: Any) -> dict[str, Any]:
