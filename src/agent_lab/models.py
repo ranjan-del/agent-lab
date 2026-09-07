@@ -310,3 +310,34 @@ class RunStep(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
 
     run: Mapped[AgentRun] = relationship(back_populates="steps")
+
+
+class Task(Base):
+    """One thing I agreed to do, extracted from a meeting. The agent's only persistent output.
+
+    SPEC section 2: fully reversible, nothing leaves the database. ``urgency`` reuses the three
+    rule tiers (hard, middle, soft) so "what may the agent do about this" reads the same way
+    everywhere. ``agreed_by_me`` is the hard rule "never mark a task done that I did not
+    confirm" made into a column.
+    """
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        CheckConstraint("urgency IN ('hard', 'middle', 'soft')", name="ck_tasks_urgency"),
+        CheckConstraint("status IN ('open', 'done', 'dropped')", name="ck_tasks_status"),
+        Index("ix_tasks_status_due_at", "status", "due_at"),
+        Index("ix_tasks_meeting_id", "meeting_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    meeting_id: Mapped[int | None] = mapped_column(ForeignKey("meetings.id", ondelete="SET NULL"))
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    urgency: Mapped[str] = mapped_column(String(16), nullable=False, default="middle")
+    due_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    agreed_by_me: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
