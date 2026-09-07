@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
@@ -11,14 +13,31 @@ from agent_lab.agent.tools import Tool
 from agent_lab.agent.types import ModelClient, RunResult, Step, ToolCall
 
 
-def run(task: str, model: ModelClient, tools: list[Tool], max_steps: int) -> RunResult:
+def run(
+    task: str,
+    model: ModelClient,
+    tools: list[Tool],
+    max_steps: int,
+    on_step: Callable[[Step], None] | None = None,
+) -> RunResult:
     by_name = {t.name: t for t in tools}
     messages: list[dict[str, Any]] = [{"role": "user", "content": task}]
     steps: list[Step] = []
 
     for _ in range(max_steps):
+        t0 = time.perf_counter()
         reply = model.complete(messages, tools)
-        steps.append(Step(ordinal=len(steps) + 1, kind="model", usage=reply.usage, text=reply.text))
+        _record(
+            steps,
+            on_step,
+            Step(
+                ordinal=len(steps) + 1,
+                kind="model",
+                usage=reply.usage,
+                text=reply.text,
+                latency_ms=_ms_since(t0),
+            ),
+        )
         if not reply.tool_calls:
             return RunResult(outcome="completed", answer=reply.text, steps=steps)
 
@@ -26,15 +45,19 @@ def run(task: str, model: ModelClient, tools: list[Tool], max_steps: int) -> Run
             {"role": "assistant", "content": reply.text, "tool_calls": list(reply.tool_calls)}
         )
         for call in reply.tool_calls:
+            t0 = time.perf_counter()
             output = _invoke(by_name, call)
-            steps.append(
+            _record(
+                steps,
+                on_step,
                 Step(
                     ordinal=len(steps) + 1,
                     kind="tool",
                     tool_name=call.name,
                     tool_input=call.arguments,
                     tool_output=output,
-                )
+                    latency_ms=_ms_since(t0),
+                ),
             )
             messages.append(
                 {
@@ -66,3 +89,14 @@ def _invoke(by_name: dict[str, Tool], call: ToolCall) -> Any:
         return {"error": f"invalid arguments for {call.name!r}: " + "; ".join(problems)}
     except Exception as exc:  # noqa: BLE001 - deliberately fail open to the model; see docstring
         return {"error": f"{call.name!r} failed: {type(exc).__name__}: {exc}"}
+
+
+def _record(steps: list[Step], on_step: Callable[[Step], None] | None, step: Step) -> None:
+    """Append, then report. The trace is written before anyone else sees the step."""
+    steps.append(step)
+    if on_step is not None:
+        on_step(step)
+
+
+def _ms_since(t0: float) -> int:
+    return int((time.perf_counter() - t0) * 1000)
