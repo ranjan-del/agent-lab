@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql shell test ingest transcript lint typecheck check migrate revision downgrade health clean
+.PHONY: help up down logs ps psql shell test ingest task transcript lint typecheck check migrate revision downgrade health clean
 
 .DEFAULT_GOAL := help
 
@@ -36,6 +36,8 @@ test:          ## Run the test suite
 ingest:        ## make ingest f=path/to/calendar.ics
 	uv run python -m agent_lab.ingest.cli calendar "$(f)"
 
+task:          ## make task t="Plan my week" [script=tests/fixtures/script_plan_week.json]
+	uv run python -m agent_lab.agent.cli --script "$(or $(script),tests/fixtures/script_plan_week.json)" "$(t)"
 transcript:    ## make transcript f=path/to/transcript.txt
 	uv run python -m agent_lab.ingest.cli transcript "$(f)"
 

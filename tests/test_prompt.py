@@ -1,4 +1,4 @@
-"""The system prompt: a stable prefix a provider can cache, carrying the rules the model must know."""
+"""The system prompt: a stable, cacheable prefix that carries the rules the model must know."""
 
 import datetime as dt
 

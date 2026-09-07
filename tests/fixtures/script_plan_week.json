@@ -1,0 +1,6 @@
+[
+  {"tool_calls": [{"name": "read_calendar_window", "id": "c1",
+                   "arguments": {"start": "2026-09-07T00:00:00+05:30", "end": "2026-09-14T00:00:00+05:30"}}],
+   "usage": [1200, 30]},
+  {"text": "Scripted answer: the calendar was read; see the load_per_day in the trace.", "usage": [1800, 25]}
+]

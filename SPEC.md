@@ -1,6 +1,6 @@
 # SPEC — agent-lab
 
-**Status: in progress. Sections 1, 2, 3 and the first entry of 7 written 6 Sep 2026. Sections 4, 5, 6, 8 open.**
+**Status: in progress. Sections 1, 2, 3, the first entry of 7 and two decisions in 8 written 6 Sep 2026. Sections 4, 5, 6 open. Week 2 build complete offline 8 Sep; provider adapter pending.**
 Answer each question in prose, not bullets. If you cannot answer one, that is the thing to
 resolve before writing the code it describes.
 
