@@ -42,7 +42,12 @@ class FakeEmbedder:
         return [self._one(text) for text in texts]
 
     def _one(self, text: str) -> list[float]:
-        digest = hashlib.blake2b(text.encode("utf-8"), digest_size=DIMENSION).digest()
+        # blake2b yields at most 64 bytes, so a 384-wide vector is six keyed digests of the
+        # same text laid end to end. Deterministic, and every byte still depends on the text.
+        digest = b"".join(
+            hashlib.blake2b(text.encode("utf-8"), digest_size=64, key=bytes([i])).digest()
+            for i in range(DIMENSION // 64)
+        )
         # Centre on zero, then normalise, so cosine distance behaves like it does for a real
         # model even though the directions are meaningless.
         raw = [(b - 127.5) / 127.5 for b in digest]
