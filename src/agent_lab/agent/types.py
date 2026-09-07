@@ -37,6 +37,7 @@ class Step:
     tool_name: str | None = None
     tool_input: dict[str, Any] | None = None
     tool_output: Any = None
+    latency_ms: int | None = None
 
 
 Outcome = Literal["completed", "step_limit", "error"]
