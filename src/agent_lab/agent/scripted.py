@@ -22,7 +22,7 @@ class ScriptedModel:
 
     @classmethod
     def from_json(cls, path: Path) -> ScriptedModel:
-        """Each entry: {"text": ..., "tool_calls": [{"name", "arguments", "id"}], "usage": [in, out]}."""
+        """Each entry: text, tool_calls as [{name, arguments, id}], and usage as [in, out]."""
         raw = json.loads(path.read_text())
         replies = [
             ModelReply(
