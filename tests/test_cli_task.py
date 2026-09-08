@@ -9,10 +9,10 @@ import os
 from pathlib import Path
 
 import pytest
-from agent_lab.agent.cli import main
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent_lab.agent.cli import main
 from agent_lab.models import AgentRun
 
 SCRIPT = Path(__file__).parent / "fixtures" / "script_plan_week.json"

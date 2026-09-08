@@ -55,6 +55,14 @@ strict = true
 mypy_path = "src"
 packages = ["agent_lab"]
 
+# sentence-transformers lives in the optional `embed` group, so the API image and CI stay
+# small. mypy therefore cannot see it on a plain `uv sync --frozen`, and --strict turns that
+# into a hard error. The import is already isolated behind a lazy, try/except-guarded property
+# that returns Any, so nothing downstream depends on its types.
+[[tool.mypy.overrides]]
+module = ["sentence_transformers.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
