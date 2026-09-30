@@ -18,6 +18,7 @@ under a hard deadline, so a regression fails in two seconds instead of hanging.
 
 from __future__ import annotations
 
+import logging
 import socket
 from collections.abc import Iterator
 from typing import Any
@@ -29,6 +30,7 @@ import uvicorn
 
 from agent_lab.api.stream import get_run_source
 from agent_lab.main import app
+from agent_lab.streaming import ScriptedRunSource
 from sse import StallingSource, parse_sse
 
 
@@ -117,3 +119,37 @@ async def test_closing_a_real_connection_cancels_the_producer(stalling: Stalling
     assert stalling.started.is_set()
     assert stalling.stopped_by is anyio.get_cancelled_exc_class()
     assert not stalling.finished
+
+
+async def test_a_client_that_stays_to_the_end_is_not_reported_as_gone(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Servers deliver http.disconnect once the response is complete, as uvicorn does.
+
+    The watcher can wake on that message before its own cancellation lands. It must not then
+    report a completed stream as a client that left.
+    """
+    app.dependency_overrides[get_run_source] = lambda: ScriptedRunSource(token_delay_s=0)
+    complete = anyio.Event()
+    request_delivered = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_delivered
+        if not request_delivered:
+            request_delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await complete.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.body" and message.get("more_body") is False:
+            complete.set()
+
+    caplog.set_level(logging.INFO, logger="agent_lab.sse")
+    try:
+        with anyio.fail_after(2):
+            await app(_scope("2.3"), receive, send)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "client left" not in caplog.text

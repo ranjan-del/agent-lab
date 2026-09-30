@@ -57,6 +57,7 @@ class EventStreamResponse(Response):
         self.init_headers({"cache-control": "no-cache", "x-accel-buffering": "no"})
         self.sent = 0
         self.disconnected = False
+        self.complete = False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": self.raw_headers})
@@ -72,6 +73,9 @@ class EventStreamResponse(Response):
                 if deadline.cancelled_caught:
                     log.info("deadline %.3fs reached after %d events", self.timeout_s, self.sent)
                     await self._send_event(send, Event("timeout", {"after_s": self.timeout_s}))
+                # Set before the final send: a server may deliver http.disconnect the moment the
+                # response is complete, and the watcher can wake on it before being cancelled.
+                self.complete = True
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
             except OSError:
                 # ASGI 2.4 servers raise from send() once the client is gone. aclosing has
@@ -92,6 +96,8 @@ class EventStreamResponse(Response):
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
+                if self.complete:
+                    return  # the normal end of a finished response, not a client leaving
                 self.disconnected = True
                 work.cancel()
                 return
