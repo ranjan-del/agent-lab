@@ -1,0 +1,23 @@
+[
+  {"text": "Reading next week's calendar first.",
+   "tool_calls": [{"name": "read_calendar_window", "id": "c1",
+                   "arguments": {"start": "2026-10-05T00:00:00+05:30", "end": "2026-10-10T00:00:00+05:30"}}],
+   "usage": [1400, 40]},
+  {"text": "Now the promises I made on the Acme call.",
+   "tool_calls": [{"name": "search_transcripts", "id": "c2",
+                   "arguments": {"query": "I will send, review, prepare by Thursday",
+                                 "start": "2026-10-05T00:00:00+05:30", "end": "2026-10-12T00:00:00+05:30"}}],
+   "usage": [2600, 45]},
+  {"text": "Three commitments, each with a Thursday deadline. Writing them as tasks.",
+   "tool_calls": [{"name": "write_tasks", "id": "c3",
+                   "arguments": {"create": [
+                     {"text": "Send Acme the revised pricing note", "urgency": "hard",
+                      "due_at": "2026-10-08T10:30:00+05:30"},
+                     {"text": "Review the board pack", "urgency": "middle",
+                      "due_at": "2026-10-08T20:00:00+05:30"},
+                     {"text": "Prepare the client call with Acme", "urgency": "middle",
+                      "due_at": "2026-10-08T15:00:00+05:30"}]}}],
+   "usage": [3300, 160]},
+  {"text": "Scripted answer. Saved one task: prepare the client call with Acme, due Thu 8 Oct 15:00; I set aside client_calls_late_morning for it. Not saved: the pricing note due Thu 10:30, refused by focus_block (hard, no override). Waiting for you: the board pack review due Thu 20:00, held under working_hours until you approve it.",
+   "usage": [3900, 70]}
+]

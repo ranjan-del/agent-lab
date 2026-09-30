@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql shell test ingest task transcript lint typecheck check migrate revision downgrade health stream clean
+.PHONY: help up down logs ps psql shell test ingest task transcript demo gate1 lint typecheck check migrate revision downgrade health stream clean
 
 .DEFAULT_GOAL := help
 
@@ -41,6 +41,13 @@ ingest:        ## make ingest f=path/to/calendar.ics
 
 task:          ## make task t="Plan my week" [script=tests/fixtures/script_plan_week.json]
 	uv run python -m agent_lab.agent.cli --script "$(or $(script),tests/fixtures/script_plan_week.json)" "$(t)"
+
+demo:          ## Migrate the dev db to head and load the Gate 1 demo week (idempotent)
+	uv run alembic upgrade head
+	uv run python -m agent_lab.demo
+
+gate1: demo    ## Gate 1: load the demo week, then run the gated multi-step task end to end
+	uv run python -m agent_lab.agent.cli --script tests/fixtures/script_plan_week_gated.json "Turn what I promised on the Acme call into tasks for next week"
 transcript:    ## make transcript f=path/to/transcript.txt
 	uv run python -m agent_lab.ingest.cli transcript "$(f)"
 
