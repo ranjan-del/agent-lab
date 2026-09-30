@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from agent_lab.models import Policy
+if TYPE_CHECKING:
+    # Only the loader needs the database, and it imports it itself. The engine imports this
+    # module for the shapes, and its import graph must stay free of sessions and models.
+    from sqlalchemy.orm import Session
 
 Tier = Literal["hard", "middle", "soft"]
 TIERS: tuple[Tier, ...] = ("hard", "middle", "soft")
@@ -150,6 +151,10 @@ def load_policies(session: Session, *, include_inactive: bool = True) -> list[Lo
 
     Inactive rows are loaded by default so a caller can show them; the engine skips them.
     """
+    from sqlalchemy import select
+
+    from agent_lab.models import Policy
+
     statement = select(Policy).order_by(Policy.id)
     if not include_inactive:
         statement = statement.where(Policy.active.is_(True))
