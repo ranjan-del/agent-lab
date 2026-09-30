@@ -197,3 +197,100 @@ def test_the_engine_import_graph_has_no_database_session_and_no_model_client() -
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     ).stdout
     assert out.strip() == "[]"
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 3: the five middle rules ask rather than refuse or allow.
+# ---------------------------------------------------------------------------------------------
+HARD_AND_MIDDLE = seed_policies(("hard", "middle"))
+
+
+def assert_asks(decision: Decision, code: str) -> None:
+    assert decision.outcome is Outcome.ASK_OVERRIDE
+    assert decision.code == code
+    assert decision.tier == "middle"
+    assert decision.reason == DESCRIPTIONS[code]
+    assert decision.also == ()
+    assert decision.needs is not None and code in decision.needs
+
+
+def test_a_seventh_meeting_in_one_day_asks() -> None:
+    """Six half-hour meetings on Tuesday, well spaced: three hours, so only the count fires."""
+    day = [meeting(i, at(22, h), at(22, h, 30)) for i, h in enumerate((11, 12, 13, 15, 16, 17))]
+    decision = evaluate(slot(at(22, 18), at(22, 18, 30)), context(meetings=day), HARD_AND_MIDDLE)
+    assert_asks(decision, "max_meetings_per_day")
+    assert "7 meetings" in decision.detail and "6" in decision.detail
+
+
+def test_a_day_past_the_meeting_hours_limit_asks() -> None:
+    """Three and a half hours booked; one more hour makes four and a half, over four."""
+    day = [meeting(1, at(22, 11), at(22, 13)), meeting(2, at(22, 14), at(22, 15, 30))]
+    decision = evaluate(slot(at(22, 16), at(22, 17)), context(meetings=day), HARD_AND_MIDDLE)
+    assert_asks(decision, "max_meeting_hours_per_day")
+    assert "4.5" in decision.detail
+
+
+def test_back_to_back_meetings_without_the_gap_ask() -> None:
+    day = [meeting(1, at(22, 14), at(22, 15))]
+    decision = evaluate(slot(at(22, 15, 5), at(22, 15, 35)), context(meetings=day), HARD_AND_MIDDLE)
+    assert_asks(decision, "min_gap_between_meetings")
+    assert "5 minutes" in decision.detail and "15" in decision.detail
+
+
+def test_anything_outside_working_hours_or_on_a_weekend_asks() -> None:
+    saturday = evaluate(slot(at(26, 12), at(26, 12, 30)), context(), HARD_AND_MIDDLE)
+    assert_asks(saturday, "working_hours")
+    evening = evaluate(slot(at(22, 18, 45), at(22, 19, 15)), context(), HARD_AND_MIDDLE)
+    assert_asks(evening, "working_hours")
+
+
+def test_changing_a_meeting_inside_the_notice_period_asks() -> None:
+    """Monday 17:00 to Tuesday 15:00 is 22 hours, inside the 24-hour notice."""
+    review = meeting(4, at(22, 15), at(22, 16))
+    move = ChangeMeeting(meeting_id=4, new_start=at(22, 16, 30), new_end=at(22, 17, 30))
+    decision = evaluate(move, context(meetings=[review], now=at(21, 17)), HARD_AND_MIDDLE)
+    assert_asks(decision, "no_change_within_notice")
+    # The same move proposed two days out is not inside the notice and passes.
+    early = evaluate(move, context(meetings=[review], now=at(20, 12)), HARD_AND_MIDDLE)
+    assert early.outcome is Outcome.ALLOW
+
+
+def test_switching_a_rule_off_in_the_database_changes_the_decision(session) -> None:
+    """A data edit, no code change: the same Saturday slot asks, then is allowed."""
+    from sqlalchemy import update
+
+    from agent_lab.agent.policy.rules import load_policies
+    from agent_lab.models import Policy
+
+    def rows(session):  # soft rules have no test until phase 4
+        return [p for p in load_policies(session) if p.tier != "soft"]
+
+    saturday = slot(at(26, 12), at(26, 12, 30))
+    before = evaluate(saturday, context(), rows(session))
+    assert before.outcome is Outcome.ASK_OVERRIDE and before.code == "working_hours"
+
+    session.execute(update(Policy).where(Policy.code == "working_hours").values(active=False))
+    session.flush()
+    after = evaluate(saturday, context(), rows(session))
+    assert after.outcome is Outcome.ALLOW
+    assert after.code is None
+
+
+def test_a_hard_rule_beats_a_middle_rule_that_also_fires() -> None:
+    """09:30 to 10:30 Tuesday is inside the focus block (hard) and before working hours
+    (middle). The answer is a refusal, not a question, and the middle rule is still named."""
+    decision = evaluate(slot(at(22, 9, 30), at(22, 10, 30)), context(), HARD_AND_MIDDLE)
+    assert_refused(decision, "focus_block")
+    assert [h.code for h in decision.also] == ["working_hours"]
+    assert decision.needs is None
+
+
+def test_two_middle_rules_ask_once_and_the_question_names_both() -> None:
+    """A Saturday slot with no gap after a Saturday meeting breaks two middle rules."""
+    day = [meeting(1, at(26, 12), at(26, 13))]
+    decision = evaluate(slot(at(26, 13), at(26, 13, 30)), context(meetings=day), HARD_AND_MIDDLE)
+    assert decision.outcome is Outcome.ASK_OVERRIDE
+    codes = [decision.code, *(h.code for h in decision.also)]
+    assert codes == ["min_gap_between_meetings", "working_hours"]
+    assert decision.needs is not None
+    assert all(c in decision.needs for c in codes)

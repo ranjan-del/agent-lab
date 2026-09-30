@@ -11,18 +11,30 @@ order the rows arrive in. W4's eval harness replays against exactly that propert
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from collections.abc import Callable, Iterable
 
 from pydantic import BaseModel
 
-from agent_lab.agent.policy.rules import DailyWindow, LoadedPolicy, Markers, NoParams, UnknownRule
+from agent_lab.agent.policy.rules import (
+    DailyWindow,
+    LoadedPolicy,
+    Markers,
+    MaxCount,
+    MaxHours,
+    Minutes,
+    NoParams,
+    NoticeHours,
+    UnknownRule,
+)
 from agent_lab.agent.policy.types import (
     AddAttendee,
     ChangeMeeting,
     Context,
     Decision,
     ExportContent,
+    MeetingInfo,
     Outcome,
     PlaceSlot,
     ProposedAction,
@@ -138,7 +150,41 @@ def _window_overlap(
 
 
 def _window_text(window: DailyWindow) -> str:
-    return f"{_hhmm(window.start)} to {_hhmm(window.end)} {window.tz}"
+    days = ", ".join(calendar.day_abbr[d - 1] for d in window.days)
+    return f"{_hhmm(window.start)} to {_hhmm(window.end)} {window.tz}, {days}"
+
+
+def _inside_window(start: dt.datetime, end: dt.datetime, window: DailyWindow) -> bool:
+    """True when ``[start, end)`` sits wholly inside one occurrence of ``window``."""
+    zone = window.zone
+    day = start.astimezone(zone).date()
+    if day.isoweekday() not in window.days:
+        return False
+    w_start = dt.datetime.combine(day, window.start, tzinfo=zone)
+    w_end = dt.datetime.combine(day, window.end, tzinfo=zone)
+    return w_start <= start and end <= w_end
+
+
+def _replaced(action: ProposedAction) -> int | None:
+    """The meeting an action moves, which must not be counted against its own new slot."""
+    return action.meeting_id if isinstance(action, ChangeMeeting) else None
+
+
+def _day_of(instant: dt.datetime, context: Context) -> dt.date:
+    return instant.astimezone(context.zone).date()
+
+
+def _others(action: ProposedAction, context: Context) -> list[MeetingInfo]:
+    replaced = _replaced(action)
+    return [m for m in context.meetings if m.id != replaced]
+
+
+def _same_day(action: ProposedAction, context: Context, day: dt.date) -> list[MeetingInfo]:
+    return [m for m in _others(action, context) if _day_of(m.start, context) == day]
+
+
+def _is_noop(action: ChangeMeeting, current: MeetingInfo) -> bool:
+    return (action.new_start, action.new_end) == (current.start, current.end)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -151,7 +197,7 @@ def _fixed_meeting_immutable(
         return None
     params = _params(policy, Markers)
     current = context.meeting(action.meeting_id)
-    if (action.new_start, action.new_end) == (current.start, current.end):
+    if _is_noop(action, current):
         return None
     markers = {m.casefold() for m in params.markers}
     matched = sorted(label for label in current.labels if label.casefold() in markers)
@@ -201,9 +247,101 @@ def _never_mark_done(policy: LoadedPolicy, action: ProposedAction, context: Cont
     return f"{which} would be marked done without my confirmation"
 
 
+# ---------------------------------------------------------------------------------------------
+# Middle rules
+# ---------------------------------------------------------------------------------------------
+def _max_meetings_per_day(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None:
+        return None
+    params = _params(policy, MaxCount)
+    day = _day_of(span[0], context)
+    count = len(_same_day(action, context, day)) + 1
+    if count <= params.max:
+        return None
+    return f"{day:%a %Y-%m-%d} would hold {count} meetings, the limit is {params.max}"
+
+
+def _max_meeting_hours_per_day(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None:
+        return None
+    params = _params(policy, MaxHours)
+    day = _day_of(span[0], context)
+    booked = sum((m.end - m.start for m in _same_day(action, context, day)), dt.timedelta())
+    total = booked + (span[1] - span[0])
+    if total <= dt.timedelta(hours=params.max_hours):
+        return None
+    hours = total / dt.timedelta(hours=1)
+    return (
+        f"{day:%a %Y-%m-%d} would hold {hours:g} hours of meetings, "
+        f"the limit is {params.max_hours:g}"
+    )
+
+
+def _min_gap_between_meetings(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None:
+        return None
+    params = _params(policy, Minutes)
+    start, end = span
+    minimum = dt.timedelta(minutes=params.minutes)
+    # Negative gap means overlap. The closest meeting is reported; ties go to the lowest id.
+    gaps = sorted((max(m.start - end, start - m.end), m.id) for m in _others(action, context))
+    if not gaps or gaps[0][0] >= minimum:
+        return None
+    gap, mid = gaps[0]
+    if gap < dt.timedelta():
+        return f"it overlaps meeting {mid}; the minimum gap is {params.minutes} minutes"
+    minutes = int(gap / dt.timedelta(minutes=1))
+    return (
+        f"it is {minutes} minutes from meeting {mid}; the minimum gap is {params.minutes} minutes"
+    )
+
+
+def _working_hours(policy: LoadedPolicy, action: ProposedAction, context: Context) -> str | None:
+    span = _span(action)
+    if span is None:
+        return None
+    window = _params(policy, DailyWindow)
+    if _inside_window(*span, window):
+        return None
+    return f"{_describe_span(*span, window.tz, window.zone)} is outside {_window_text(window)}"
+
+
+def _no_change_within_notice(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    if not isinstance(action, ChangeMeeting):
+        return None
+    params = _params(policy, NoticeHours)
+    current = context.meeting(action.meeting_id)
+    if _is_noop(action, current):
+        return None
+    lead = current.start - context.now
+    if lead >= dt.timedelta(hours=params.hours):
+        return None
+    hours = round(lead / dt.timedelta(hours=1), 1)
+    return (
+        f"meeting {current.id} starts {hours:g} hours from now, "
+        f"inside the {params.hours}-hour notice"
+    )
+
+
 _CHECKS: dict[str, Check] = {
     "fixed_meeting_immutable": _fixed_meeting_immutable,
     "focus_block": _focus_block,
     "no_external_exposure": _no_external_exposure,
     "never_mark_done": _never_mark_done,
+    "max_meetings_per_day": _max_meetings_per_day,
+    "max_meeting_hours_per_day": _max_meeting_hours_per_day,
+    "min_gap_between_meetings": _min_gap_between_meetings,
+    "working_hours": _working_hours,
+    "no_change_within_notice": _no_change_within_notice,
 }
