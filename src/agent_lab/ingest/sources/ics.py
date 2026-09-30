@@ -157,7 +157,16 @@ def _attendees(component: Any) -> tuple[RawAttendee, ...]:
 def _raw_payload(component: Any) -> dict[str, Any]:
     """Keep the original fields, so a parser bug is re-parsed rather than re-fetched."""
     keep = ("SUMMARY", "LOCATION", "STATUS", "UID", "RRULE", "DESCRIPTION", "SEQUENCE")
-    return {k: str(component.get(k)) for k in keep if component.get(k) is not None}
+    payload: dict[str, Any] = {
+        k: str(component.get(k)) for k in keep if component.get(k) is not None
+    }
+    # CATEGORIES may repeat and each line may hold several words. Kept as one flat list,
+    # because the policy context matches fixed-meeting markers against them.
+    categories = component.get("CATEGORIES")
+    if categories is not None:
+        lines = categories if isinstance(categories, list) else [categories]
+        payload["CATEGORIES"] = [str(word) for line in lines for word in line.cats]
+    return payload
 
 
 def parse(

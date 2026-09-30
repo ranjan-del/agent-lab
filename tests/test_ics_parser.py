@@ -203,3 +203,16 @@ def test_parse_counts_every_row_it_refuses_by_reason(tmp_path: Path) -> None:
 def test_parse_without_a_counter_still_works(tmp_path: Path) -> None:
     """The counter is opt-in. Callers that do not care are not forced to change."""
     assert len(_parse(tmp_path, ics_fixtures.DROPPED_MIX)) == 1
+
+
+def test_categories_are_kept_in_raw_as_a_list_of_words(tmp_path: Path) -> None:
+    """The policy context matches fixed-meeting markers against ICS categories, so keep them."""
+    body = ics_fixtures.SIMPLE.replace(
+        "SUMMARY:Design review\n",
+        "SUMMARY:Design review\nCATEGORIES:Important,Client\nCATEGORIES:Fixed\n",
+    )
+    (event,) = _parse(tmp_path, body)
+    assert event.raw["CATEGORIES"] == ["Important", "Client", "Fixed"]
+
+    (plain,) = _parse(tmp_path, ics_fixtures.SIMPLE)
+    assert "CATEGORIES" not in plain.raw
