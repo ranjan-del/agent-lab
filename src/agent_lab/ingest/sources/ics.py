@@ -74,9 +74,9 @@ def _as_aware(value: Any) -> dt.datetime | None:
     """Return an aware datetime in its ORIGINAL timezone.
 
     Recurrence must be expanded in the timezone the series was written in. "Every Tuesday at
-    10:00 New York time" is a statement about local time, and local time is not a fixed offset
-    from UTC: it shifts at a DST boundary. Expanding in UTC adds a fixed seven days and
-    silently moves every occurrence after the boundary by an hour.
+    ten in the morning, New York time" is a statement about local time, and local time is not
+    a fixed offset from UTC: it shifts at a DST boundary. Expanding in UTC adds a fixed seven
+    days and silently moves every occurrence after the boundary by an hour.
     """
     if isinstance(value, dt.datetime):
         if value.tzinfo is None:
@@ -261,8 +261,9 @@ def _expand(
     rule = rrulestr(rrule_value.to_ical().decode(), dtstart=start)
 
     for local_occurrence in rule.between(window_start, window_end, inc=True):
-        # dateutil keeps the tzinfo and advances the LOCAL fields, so 10:00 stays 10:00 across
-        # a DST boundary. Converting here, after expansion, is what makes that correct.
+        # dateutil keeps the tzinfo and advances the LOCAL fields, so the wall-clock time stays
+        # the same across a DST boundary. Converting here, after expansion, is what makes that
+        # correct.
         occurrence = local_occurrence.astimezone(dt.UTC)
         if occurrence in excluded:
             continue

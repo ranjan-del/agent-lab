@@ -11,7 +11,6 @@ order the rows arrive in. W4's eval harness replays against exactly that propert
 
 from __future__ import annotations
 
-import calendar
 import datetime as dt
 from collections.abc import Callable, Iterable
 
@@ -129,10 +128,6 @@ def _span(action: ProposedAction) -> tuple[dt.datetime, dt.datetime] | None:
     return None
 
 
-def _hhmm(t: dt.time) -> str:
-    return t.strftime("%H:%M")
-
-
 def _describe_span(start: dt.datetime, end: dt.datetime, tz: str, zone: dt.tzinfo) -> str:
     s, e = start.astimezone(zone), end.astimezone(zone)
     return f"{s:%a %Y-%m-%d %H:%M} to {e:%H:%M} {tz}"
@@ -156,8 +151,7 @@ def _window_overlap(
 
 
 def _window_text(window: DailyWindow) -> str:
-    days = ", ".join(calendar.day_abbr[d - 1] for d in window.days)
-    return f"{_hhmm(window.start)} to {_hhmm(window.end)} {window.tz}, {days}"
+    return window.describe()
 
 
 def _inside_window(start: dt.datetime, end: dt.datetime, window: DailyWindow) -> bool:

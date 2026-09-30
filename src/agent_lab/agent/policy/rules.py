@@ -12,7 +12,9 @@ row well-formed, and what are its parameters as real Python values".
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -83,6 +85,11 @@ class DailyWindow(_Shape):
     def zone(self) -> ZoneInfo:
         return ZoneInfo(self.tz)
 
+    def describe(self) -> str:
+        """The window in words, e.g. "08:00 to 10:30 UTC, Mon, Wed"."""
+        days = ", ".join(calendar.day_abbr[d - 1] for d in self.days)
+        return f"{self.start:%H:%M} to {self.end:%H:%M} {self.tz}, {days}"
+
 
 class MaxCount(_Shape):
     max: int = Field(gt=0)
@@ -144,6 +151,24 @@ class LoadedPolicy:
     description: str
     params: _Shape
     active: bool
+
+
+def params_of[S: _Shape](policies: Iterable[LoadedPolicy], code: str, shape: type[S]) -> S:
+    """The parsed parameters of the row ``code``, whether or not it is active.
+
+    For code that needs a rule's numbers outside the engine (the prompt, a tool description,
+    the calendar's working hours), so those numbers are read from the row and never retyped.
+    A missing row is an error naming the code, not a silent default.
+    """
+    for policy in policies:
+        if policy.code == code:
+            if not isinstance(policy.params, shape):
+                raise TypeError(
+                    f"policy {code!r} has params {type(policy.params).__name__}, "
+                    f"expected {shape.__name__}"
+                )
+            return policy.params
+    raise LookupError(f"policy {code!r} is not loaded; its numbers cannot be read")
 
 
 def load_policies(session: Session, *, include_inactive: bool = True) -> list[LoadedPolicy]:
