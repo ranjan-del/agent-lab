@@ -262,16 +262,13 @@ def test_switching_a_rule_off_in_the_database_changes_the_decision(session) -> N
     from agent_lab.agent.policy.rules import load_policies
     from agent_lab.models import Policy
 
-    def rows(session):  # soft rules have no test until phase 4
-        return [p for p in load_policies(session) if p.tier != "soft"]
-
     saturday = slot(at(26, 12), at(26, 12, 30))
-    before = evaluate(saturday, context(), rows(session))
+    before = evaluate(saturday, context(), load_policies(session))
     assert before.outcome is Outcome.ASK_OVERRIDE and before.code == "working_hours"
 
     session.execute(update(Policy).where(Policy.code == "working_hours").values(active=False))
     session.flush()
-    after = evaluate(saturday, context(), rows(session))
+    after = evaluate(saturday, context(), load_policies(session))
     assert after.outcome is Outcome.ALLOW
     assert after.code is None
 
@@ -294,3 +291,80 @@ def test_two_middle_rules_ask_once_and_the_question_names_both() -> None:
     assert codes == ["min_gap_between_meetings", "working_hours"]
     assert decision.needs is not None
     assert all(c in decision.needs for c in codes)
+
+
+# ---------------------------------------------------------------------------------------------
+# Phase 4: the four soft rules never block. They advise on an ALLOW and say it was set aside.
+# ---------------------------------------------------------------------------------------------
+ALL = seed_policies()
+
+
+def assert_advises(decision: Decision, code: str) -> str:
+    assert decision.outcome is Outcome.ALLOW
+    assert decision.code is None
+    assert [n.code for n in decision.notes] == [code]
+    note = decision.notes[0].note
+    assert "set aside" in note and code in note and DESCRIPTIONS[code] in note
+    return note
+
+
+def test_a_slot_on_a_heavier_day_is_allowed_with_a_note_naming_the_lighter_day() -> None:
+    tuesday = [meeting(1, at(22, 11), at(22, 11, 30)), meeting(2, at(22, 12), at(22, 12, 30))]
+    ctx = context(meetings=tuesday, candidate_days=[dt.date(2026, 9, 22), dt.date(2026, 9, 23)])
+    note = assert_advises(
+        evaluate(slot(at(22, 14), at(22, 14, 30)), ctx, ALL), "prefer_lightest_day"
+    )
+    assert "2026-09-23" in note
+    # On the lighter day itself, nothing is set aside.
+    assert evaluate(slot(at(23, 14), at(23, 14, 30)), ctx, ALL).notes == ()
+
+
+def test_a_one_to_one_away_from_the_others_is_allowed_with_a_note() -> None:
+    thursday = [meeting(1, at(24, 15), at(24, 15, 30), one_to_one=True)]
+    one_to_one = slot(at(22, 14), at(22, 14, 30), is_one_to_one=True)
+    note = assert_advises(
+        evaluate(one_to_one, context(meetings=thursday), ALL), "keep_one_to_ones_same_day"
+    )
+    assert "2026-09-24" in note
+
+
+def test_a_long_slot_is_allowed_with_a_note_that_a_short_one_was_preferred() -> None:
+    note = assert_advises(
+        evaluate(slot(at(22, 14), at(22, 15)), context(), ALL), "prefer_short_slots"
+    )
+    assert "60 minutes" in note and "30" in note
+
+
+def test_a_client_call_outside_late_morning_is_allowed_with_a_note() -> None:
+    afternoon = slot(at(22, 15), at(22, 15, 30), is_client_call=True)
+    note = assert_advises(evaluate(afternoon, context(), ALL), "client_calls_late_morning")
+    assert "11:00 to 13:00" in note
+    late_morning = slot(at(22, 11, 30), at(22, 12), is_client_call=True)
+    assert evaluate(late_morning, context(), ALL).notes == ()
+
+
+def test_a_middle_rule_beats_a_soft_rule_and_the_question_carries_no_notes() -> None:
+    """A 60-minute Saturday slot: working hours (middle) and short slots (soft) both fire.
+    The action is not allowed yet, so there is nothing to set aside: ask, with no notes."""
+    decision = evaluate(slot(at(26, 12), at(26, 13)), context(), ALL)
+    assert decision.outcome is Outcome.ASK_OVERRIDE
+    assert decision.code == "working_hours"
+    assert decision.notes == ()
+
+
+def test_soft_rules_never_block_even_when_all_four_fire() -> None:
+    thursday = [meeting(1, at(24, 15), at(24, 15, 30), one_to_one=True)]
+    tuesday = [meeting(2, at(22, 11), at(22, 11, 30))]
+    ctx = context(
+        meetings=thursday + tuesday,
+        candidate_days=[dt.date(2026, 9, 22), dt.date(2026, 9, 23)],
+    )
+    action = slot(at(22, 15), at(22, 16), is_one_to_one=True, is_client_call=True)
+    decision = evaluate(action, ctx, ALL)
+    assert decision.outcome is Outcome.ALLOW
+    assert [n.code for n in decision.notes] == [
+        "prefer_lightest_day",
+        "keep_one_to_ones_same_day",
+        "prefer_short_slots",
+        "client_calls_late_morning",
+    ]

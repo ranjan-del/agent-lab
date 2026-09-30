@@ -30,6 +30,7 @@ from agent_lab.agent.policy.rules import (
 )
 from agent_lab.agent.policy.types import (
     AddAttendee,
+    Advisory,
     ChangeMeeting,
     Context,
     Decision,
@@ -90,7 +91,12 @@ def evaluate(
         return Decision(
             Outcome.ASK_OVERRIDE, hit=middle[0], also=tuple(middle[1:]), needs=_needs(middle)
         )
-    return Decision(Outcome.ALLOW)
+    soft = [h for h in hits if h.tier == "soft"]
+    notes = tuple(
+        Advisory(policy_id=h.policy_id, code=h.code, description=h.description, detail=h.detail)
+        for h in soft
+    )
+    return Decision(Outcome.ALLOW, notes=notes)
 
 
 def _needs(middle: list[RuleHit]) -> str:
@@ -181,6 +187,16 @@ def _others(action: ProposedAction, context: Context) -> list[MeetingInfo]:
 
 def _same_day(action: ProposedAction, context: Context, day: dt.date) -> list[MeetingInfo]:
     return [m for m in _others(action, context) if _day_of(m.start, context) == day]
+
+
+def _kind(action: ProposedAction, context: Context) -> tuple[bool, bool]:
+    """(is_one_to_one, is_client_call) for what lands on the calendar. A move keeps its kind."""
+    if isinstance(action, PlaceSlot):
+        return action.is_one_to_one, action.is_client_call
+    if isinstance(action, ChangeMeeting):
+        current = context.meeting(action.meeting_id)
+        return current.is_one_to_one, current.is_client_call
+    return False, False
 
 
 def _is_noop(action: ChangeMeeting, current: MeetingInfo) -> bool:
@@ -334,6 +350,73 @@ def _no_change_within_notice(
     )
 
 
+# ---------------------------------------------------------------------------------------------
+# Soft rules. They never block: a hit becomes an Advisory on an ALLOW.
+# ---------------------------------------------------------------------------------------------
+def _prefer_lightest_day(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None or not context.candidate_days:
+        return None
+    _params(policy, NoParams)
+
+    def load(day: dt.date) -> tuple[int, dt.timedelta]:
+        booked = _same_day(action, context, day)
+        return len(booked), sum((m.end - m.start for m in booked), dt.timedelta())
+
+    target = _day_of(span[0], context)
+    lightest = min(context.candidate_days, key=lambda d: (load(d), d))
+    if load(target) <= load(lightest):
+        return None
+    return (
+        f"{target:%a %Y-%m-%d} already holds {load(target)[0]} meetings; "
+        f"{lightest:%a %Y-%m-%d} holds {load(lightest)[0]}"
+    )
+
+
+def _keep_one_to_ones_same_day(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None or not _kind(action, context)[0]:
+        return None
+    _params(policy, NoParams)
+    days = sorted({_day_of(m.start, context) for m in _others(action, context) if m.is_one_to_one})
+    target = _day_of(span[0], context)
+    if not days or target in days:
+        return None
+    where = ", ".join(f"{d:%a %Y-%m-%d}" for d in days)
+    return f"this one-to-one is on {target:%a %Y-%m-%d}; the others are on {where}"
+
+
+def _prefer_short_slots(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None:
+        return None
+    params = _params(policy, Minutes)
+    length = span[1] - span[0]
+    if length <= dt.timedelta(minutes=params.minutes):
+        return None
+    minutes = int(length / dt.timedelta(minutes=1))
+    return f"the slot is {minutes} minutes; the preference is {params.minutes}"
+
+
+def _client_calls_late_morning(
+    policy: LoadedPolicy, action: ProposedAction, context: Context
+) -> str | None:
+    span = _span(action)
+    if span is None or not _kind(action, context)[1]:
+        return None
+    window = _params(policy, DailyWindow)
+    if _inside_window(*span, window):
+        return None
+    when = _describe_span(*span, window.tz, window.zone)
+    return f"this client call at {when} is outside {_window_text(window)}"
+
+
 _CHECKS: dict[str, Check] = {
     "fixed_meeting_immutable": _fixed_meeting_immutable,
     "focus_block": _focus_block,
@@ -344,4 +427,8 @@ _CHECKS: dict[str, Check] = {
     "min_gap_between_meetings": _min_gap_between_meetings,
     "working_hours": _working_hours,
     "no_change_within_notice": _no_change_within_notice,
+    "prefer_lightest_day": _prefer_lightest_day,
+    "keep_one_to_ones_same_day": _keep_one_to_ones_same_day,
+    "prefer_short_slots": _prefer_short_slots,
+    "client_calls_late_morning": _client_calls_late_morning,
 }
