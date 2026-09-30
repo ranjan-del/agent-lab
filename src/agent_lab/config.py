@@ -15,5 +15,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://agentlab:agentlab@localhost:5433/agentlab"
     app_name: str = "agent-lab"
 
+    # GET /runs/stream. The deadline bounds the whole run, not the gap between events: a
+    # budget for work, which is what a caller cares about. A JSON file of scripted replies
+    # (the CLI's format) replaces the built-in demo when set.
+    stream_timeout_s: float = 30.0
+    stream_token_delay_s: float = 0.05
+    stream_script: str | None = None
+
 
 settings = Settings()
