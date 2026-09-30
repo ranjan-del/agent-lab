@@ -7,6 +7,13 @@ replaced by two stand-ins (one that returns no rows, one that is down), and the 
 repo's own `ScriptedModel` or a model that never stops asking. Re-run it with
 `uv run python docs/notes/scripts/2026-09-30-tool-calling.py`. Its full output is the appendix.
 
+Updated after Phase 5. Two things this note first measured have since changed in `src/`, and
+both are kept below as a before and after rather than rewritten away: the tool argument models
+now forbid unknown keys (caf36c3), so the misspelt key of section 4 is an ordinary error; and
+"never mark done" is refused by the policy gate in `execute()` (f0593a3), not by `write_tasks`.
+The script was brought to the new `build_tools(session, embedder, policies=, gate=)` API, and
+every `file:line` below was re-checked against the tree at that commit.
+
 Every claim about how models use tools is read from Anthropic's own pages on 2026-09-30,
 listed at the end. Primary sources only.
 
@@ -22,15 +29,15 @@ define-tools page):
 
 | Part | What the docs require | This repo |
 |---|---|---|
-| `name` | `^[a-zA-Z0-9_-]{1,128}$` | `read_calendar_window`, `search_transcripts`, `write_tasks` (`toolkit.py:41,51,61`) |
-| `description` | "by far the most important factor in tool performance"; at least 3 to 4 sentences | 37, 37 and 44 words, three to four sentences each (`toolkit.py:42-66`) |
+| `name` | `^[a-zA-Z0-9_-]{1,128}$` | `read_calendar_window`, `search_transcripts`, `write_tasks` (`toolkit.py:49,59,69`) |
+| `description` | "by far the most important factor in tool performance"; at least 3 to 4 sentences | 42, 37 and 110 words as rendered from the seeded rows (`toolkit.py:50-78`); `write_tasks` was 44 before Phase 5 made it say what the gate checks |
 | `input_schema` | a JSON Schema object | the pydantic model's schema, `args_model` on `Tool` (`tools.py:16`) |
 | `input_examples` | optional, schema-validated, 20 to 200 tokens each | none |
 
 So a description is not documentation. It is prompt text the model reads on every turn, and
 it is the only place to say things the schema cannot: when to use the tool, when not to, and
 what it will not return. `write_tasks` does this well: "Never set status to done; only I
-confirm completion. Use dropped for a task that no longer applies" (`toolkit.py:63-66`)
+confirm completion. Use dropped for a task that no longer applies" (`toolkit.py:72-73`)
 tells the model the rule and the legal alternative in the same breath. The engineering post
 puts it as describing the tool "to a new hire on your team".
 
@@ -38,18 +45,20 @@ What the model is actually shown for each tool, measured:
 
 | Tool | Description words | Properties | Required | `additionalProperties` | Strict mode cannot enforce | Python-only validators |
 |---|---|---|---|---|---|---|
-| `read_calendar_window` | 37 | 3 | start, end | absent | none | `_aware`, `_ordered` |
-| `search_transcripts` | 37 | 5 | query | absent | maximum, minLength, minimum | `_aware` |
-| `write_tasks` | 44 | 2 | none | absent | minLength | none |
+| `read_calendar_window` | 42 | 3 | start, end | `false` | none | `_aware`, `_ordered` |
+| `search_transcripts` | 37 | 5 | query | `false` | maximum, minLength, minimum | `_aware` |
+| `write_tasks` | 110 | 2 | none | `false` | minLength | none |
+
+Before caf36c3 the `additionalProperties` column read "absent" on all three (section 4).
 
 The last column is the one that matters later. "Must be timezone-aware" and "end must be
-after start" (`tools_calendar.py:32-43`) are Python validators. They run, but they are not in
+after start" (`tools_calendar.py:35-46`) are Python validators. They run, but they are not in
 the schema, so the model only learns about them from the description or from an error. The
 calendar description does not mention either. The first time a model sends a naive
 datetime, the error message in section 3 is its only teacher.
 
 One gap, recorded rather than fixed: nothing in the repo emits these schemas yet.
-`ModelClient.complete` takes `tools: list[Any]` (`types.py:54`) and `Tool` has no method that
+`ModelClient.complete` takes `tools: list[Any]` (`types.py:61`) and `Tool` has no method that
 produces `{name, description, input_schema}` (`tools.py:12-21`). The provider adapter is still
 deferred, so the table above is what the model *would* be shown.
 
@@ -62,11 +71,11 @@ one. Its advice, next to what this repo does:
 | Principle (engineering post, define-tools page) | This repo | Verdict |
 |---|---|---|
 | Few high-leverage tools, not an API mirror. `schedule_event` over `list_users` + `list_events` + `create_event` | three tools for the three jobs SPEC section 2 names | holds |
-| Consolidate: return what the next step needs | `read_calendar_window` returns meetings, load per day *and* free slots (`tools_calendar.py:79-87`), so "when am I free" is one call, not a calendar dump the model has to do arithmetic on | holds, and it is the best-designed of the three |
+| Consolidate: return what the next step needs | `read_calendar_window` returns meetings, load per day *and* free slots (`tools_calendar.py:84-94`), so "when am I free" is one call, not a calendar dump the model has to do arithmetic on | holds, and it is the best-designed of the three |
 | Namespacing (`asana_search`, `jira_search`) when tools span services | one service, three tools | not needed yet; needed the day a second calendar source arrives |
-| Return meaningful context: names over opaque ids | each passage carries its meeting's id, title and start (`tools_transcripts.py:65-77`) | holds; the id is kept because `write_tasks` needs it |
-| Token efficiency: filtering, pagination, sensible defaults (Claude Code caps a tool response at 25,000 tokens) | `limit` defaults to 5, capped at 20 (`tools_transcripts.py:32`) | holds for search; the calendar window is unbounded, so a year-long window returns every meeting |
-| Unambiguous parameter names (`user_id`, not `user`) | `meeting_id`, `due_at`, `id` inside `update` | mostly; `id` in `TaskUpdate` (`tools_tasks.py:33`) has no description |
+| Return meaningful context: names over opaque ids | each passage carries its meeting's id, title and start (`tools_transcripts.py:67-80`) | holds; the id is kept because `write_tasks` needs it |
+| Token efficiency: filtering, pagination, sensible defaults (Claude Code caps a tool response at 25,000 tokens) | `limit` defaults to 5, capped at 20 (`tools_transcripts.py:34`) | holds for search; the calendar window is unbounded, so a year-long window returns every meeting |
+| Unambiguous parameter names (`user_id`, not `user`) | `meeting_id`, `due_at`, `id` inside `update` | mostly; `id` in `TaskUpdate` (`tools_tasks.py:40`) has no description |
 | Actionable errors, not "opaque error codes or tracebacks" | section 3 | mostly holds, with two warts |
 
 The design point I underrated: **the response is part of the tool's interface to the model,
@@ -89,7 +98,7 @@ repo's most important checks:
 | Where strict mode still fails | Source | Consequence here |
 |---|---|---|
 | `minimum`, `maximum`, `minLength`, `maxLength` are unsupported; SDK helpers move them into the description and validate client-side | structured-outputs page | `limit <= 20` and non-empty `query` stay pydantic's job (table in section 1) |
-| `additionalProperties` must be `false` | same | all three argument schemas omit it today (section 1), so strict mode would reject them as written |
+| `additionalProperties` must be `false` | same | all three argument schemas omitted it until caf36c3; they now emit `false` (section 1), so this one no longer blocks strict mode |
 | Semantics are not types | by construction | a well-typed ISO string with no offset, or an end before its start, passes any schema; only `_aware` and `_ordered` catch it |
 | `stop_reason: "refusal"` or `"max_tokens"`: output "may not match your schema" | structured-outputs page | the adapter must check `stop_reason` before trusting a parsed call |
 | Enum casing is not guaranteed ("typically in the first letter of a word following a space") | same | `urgency` values are one lowercase word, so low risk, but a `"Hard"` would fail pydantic's `Literal` |
@@ -99,70 +108,75 @@ repo's most important checks:
 worth having, but it does not remove server-side validation, and so it does not remove the
 need to decide what happens when validation fails. That decision is section 5.
 
-What the repo does with a bad call today, measured through `loop._invoke` (`loop.py:82-97`),
-the function the loop calls for every tool call (`loop.py:55`):
+What the repo does with a bad call today, measured through `loop._invoke` (`loop.py:92-107`),
+the function the loop calls for every tool call (`loop.py:63`):
 
 | Case | Raised? | Error? | What the model reads (trimmed) |
 |---|---|---|---|
 | Unknown tool name (`read_calendar`) | no | yes | `unknown tool 'read_calendar'; available: ['read_calendar_window', 'search_transcripts', 'write_tasks']` |
 | Missing required arg | no | yes | `invalid arguments for 'read_calendar_window': start: Input should be a valid datetime...` |
-| Naive datetime | no | yes | `start: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30; end: ...` |
+| Naive datetime | no | yes | `start: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30; end: ...` |
 | End before start | no | yes | `invalid arguments for 'read_calendar_window': : Value error, end must be after start` |
 | Wrong type (`limit: "five"`) | no | yes | `limit: Input should be a valid integer...` |
 | Out of range (`limit: 50`) | no | yes | `limit: Input should be less than or equal to 20` |
 | Enum miss (`urgency: "urgent"`) | no | yes | `create.0.urgency: Input should be 'hard', 'middle' or 'soft'` |
-| Tool-level refusal (`status: done`) | no | yes | `hard rule: never mark a task done that I did not confirm. Leave status alone, or set it to 'dropped'...` |
+| Gate refusal (`status: done`) | no | refused | `Not written. Refused by never_mark_done (hard): ... task 7 would be marked done without my confirmation.` A `refused` entry from the gate, not an `error`; before f0593a3 `write_tasks` itself returned an `error` here |
 | Tool raises (database down) | no | yes | `'search_transcripts' failed: ConnectionError: connection to server at localhost:5432 refused` |
-| **Misspelt key (`creates`)** | no | **no** | `{"created": [], "updated": []}` |
+| **Misspelt key (`creates`)** | no | **yes, since caf36c3** | `invalid arguments for 'write_tasks': creates: Extra inputs are not permitted`. Before: `{"created": [], "updated": []}`, no error |
 | Valid call | no | no | the window, meetings, load and free slots |
 
-Eleven cases, nothing raised. The nine that report an error are good repair material: each names the tool, the field
+Eleven cases, nothing raised. Nine report an error, one is a named gate refusal, and only the
+valid call reports success. When this note was first written the misspelt key was a second
+"success". The errors are good repair material: each names the tool, the field
 and what a legal value looks like, which is what the handle-tool-calls page asks for
 ("include what went wrong and what Claude should try next"). The unknown-tool case is the
 best of them, because it lists the real names, so a near miss is a one-step fix.
 
 Two warts. The end-before-start error has an empty location, `: Value error`, because a
-model-level validator has `loc == ()` and `loop.py:94` joins it anyway. Readable, but it
-should say which fields. The second wart is the misspelt key, and it is not a wart. It is
-section 4.
+model-level validator has `loc == ()` and `loop.py:104` joins it anyway. Readable, but it
+should say which fields. The second wart was the misspelt key, and it was not a wart. It was
+section 4, and it is fixed.
 
-## 4. The failure fail-open cannot see
+## 4. The failure fail-open could not see, before and after caf36c3
 
-`WriteTasksArgs` has two fields, both defaulting to empty lists (`tools_tasks.py:40-42`).
-Pydantic's default is `extra="ignore"`. So `{"creates": [...]}` validates as "create nothing,
-update nothing", `write_tasks` does exactly that, and returns success.
+`WriteTasksArgs` has two fields, both defaulting to empty lists (`tools_tasks.py:52-53`).
+Pydantic's default is `extra="ignore"`, and until caf36c3 the tool models used it. So
+`{"creates": [...]}` validated as "create nothing, update nothing", `write_tasks` did exactly
+that, and returned success. The script rebuilds that old behaviour on a subclass
+(`IgnoreWriteTasksArgs`), so the before is measured today, not remembered.
 
 Through a full run with the scripted model:
 
-| Field | Value |
-|---|---|
-| Outcome | `completed` |
-| Tool output | `{'created': [], 'updated': []}` |
-| Model's answer | "Saved: send deck, urgency hard." |
-| Rows written | 0 |
+| Field | Before (`extra="ignore"`) | Now (`extra="forbid"`, caf36c3) |
+|---|---|---|
+| First tool output | `{'created': [], 'updated': []}` | `{"error": "invalid arguments for 'write_tasks': creates: Extra inputs are not permitted"}` |
+| What the model can do | nothing: it was told it succeeded | repair it: the script's second call uses `create` and gets `created: [1]` |
+| Outcome | `completed` | `completed` |
+| Model's answer | "Saved: send deck, urgency hard." | "Saved: send deck, urgency hard." |
+| Rows written | 0 | 1 |
 
-This is silent partial success, the worst failure an agent has: the run is green, the answer
-is confident, and the task is lost. Fail-open depends on the mistake producing an error, and
-here nothing does. All three argument models behave the same way:
+Before, this was silent partial success, the worst failure an agent has: the run was green,
+the answer confident, and the task lost. Fail open depends on the mistake producing an error,
+and here nothing did. All three argument models, sent one unknown key alongside a valid call:
 
-| Tool | Valid call plus one unknown key |
-|---|---|
-| `read_calendar_window` | accepted, `bogus` silently dropped |
-| `search_transcripts` | accepted, `bogus` silently dropped |
-| `write_tasks` | accepted, `bogus` silently dropped |
+| Tool | Before | Now |
+|---|---|---|
+| `read_calendar_window` | accepted, `bogus` silently dropped | rejected: `bogus: Extra inputs are not permitted` |
+| `search_transcripts` | accepted, `bogus` silently dropped | rejected |
+| `write_tasks` | accepted, `bogus` silently dropped | rejected |
 
-The repo already knows the fix, because the policy engine applies it to its own data:
-"Every shape forbids unknown keys. A misspelt key must fail, not vanish" (`rules.py:31-34`).
-The tool arguments, which come from the least trustworthy source in the system, do not get
-the same protection. Applied on a subclass in the script, `src/` untouched:
+The repo already knew the fix, because the policy engine applies it to its own data:
+"Every shape forbids unknown keys. A misspelt key must fail, not vanish" (`rules.py:33-36`).
+The tool arguments, which come from the least trustworthy source in the system, now get the
+same protection:
 
-| | Today (`extra="ignore"`) | Proposed (`extra="forbid"`) |
+| | Before (`extra="ignore"`) | Now (`extra="forbid"`) |
 |---|---|---|
 | `{"creates": [...]}` | validates to `create=[]`, `update=[]` | `invalid arguments for 'write_tasks': creates: Extra inputs are not permitted` |
 | Schema `additionalProperties` | absent | `False` |
 
-One setting turns a silent success into an ordinary repairable error, and makes the schema
-strict-mode ready as a side effect.
+One setting turned a silent success into an ordinary repairable error, and made the schemas
+strict-mode ready on this point as a side effect.
 
 ## 5. Fail open or fail closed: the justification for SPEC decision 2
 
@@ -178,7 +192,7 @@ comparison (the same loop with no `except`):
 The model read this before its second call, and it was enough to repair the call:
 
 ```
-{"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30; end: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30"}
+{"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30; end: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30"}
 ```
 
 The argument, then:
@@ -194,8 +208,8 @@ The argument, then:
 
 Fail closed has one real advantage, the last two rows: it cannot loop. So fail open is only
 safe with a bound, and the bound is `max_steps`: the loop runs `range(max_steps)`
-(`loop.py:33`), defaults to 8 (`execute.py:26`, `cli.py:28`), and ends with
-`outcome="step_limit"` and `answer=None` (`loop.py:77-79`), not with the last text dressed up
+(`loop.py:41`), defaults to 8 (`execute.py:33`, `cli.py:28`), and ends with
+`outcome="step_limit"` and `answer=None` (`loop.py:87-89`), not with the last text dressed up
 as an answer. A model that asks for a tool whose database is down, forever:
 
 | `max_steps` | Outcome | Model calls | Tool errors | Steps |
@@ -216,10 +230,10 @@ the harness's own, and the repo already draws that line in two places:
 
 | Raised, on purpose | Where | Why it must not go to the model |
 |---|---|---|
-| `IncompleteContext` | `policy/types.py:142-152` | the caller forgot to load a meeting; the model cannot load it |
-| `UnknownRule` | `policy/engine.py:72-73` | a policy row with no test; "a rule nobody can evaluate must not pass as harmless" |
+| `IncompleteContext` | `policy/types.py:152-153` | the caller forgot to load a meeting; the model cannot load it |
+| `UnknownRule` | `policy/engine.py:71-72` | a policy row with no test; "a rule nobody can evaluate must not pass as harmless" |
 
-`loop.py:96` catches every `Exception`, so a programming bug inside a tool (an `AttributeError`,
+`loop.py:106` catches every `Exception`, so a programming bug inside a tool (an `AttributeError`,
 say) also goes to the model as `'x' failed: AttributeError: ...`. The model cannot fix that
 either. The step limit still bounds it, so it is not dangerous, but the trace cannot tell "the
 model sent a bad argument" from "our code is broken". Worth separating when the recorder
@@ -228,10 +242,11 @@ starts counting failures.
 ## 6. The policy gate: a refusal is a result too
 
 The policy engine is a pure function from (action, context, rows) to a `Decision`
-(`policy/engine.py:53-99`): no model, no session, no I/O. It is not wired into the loop yet;
-no module outside `policy/` imports it (that wiring is Phase 5, in progress elsewhere). So the
-rendering below is the script's own, to show the shape: a refusal is the same kind of thing as
-a validation error, a result the model reads and acts on, not an exception.
+(`policy/engine.py:52-98`): no model, no session, no I/O. When this note was first written it
+was not wired into the loop. Since f0593a3 it is: `execute()` builds one `WriteGate` per run
+and binds it to `write_tasks` (`execute.py:41-42`), so every proposed write is decided before
+it is made. The first table is the engine on its own, rendered by the script to show the
+shape; the second is the same kinds of write through the real gate, as the model reads them.
 
 | Proposed action | Outcome | Rule | What the model would read (trimmed) |
 |---|---|---|---|
@@ -241,40 +256,55 @@ a validation error, a result the model reads and acts on, not an exception.
 | Slot 14:00 to 15:00 Thu | allow | none | `Preference set aside (prefer_short_slots): ...` |
 | Move meeting 99 (not loaded) | **raises** `IncompleteContext` | none | nothing: this is a caller bug, and it fails closed |
 
-That table is section 5 again. A hard refusal is fail open in exactly the sense decision 2
-means: the run continues, the model reads which rule stopped it, and it can do the permitted
-thing instead, which is what the system prompt asks of it ("If a rule stops you, say which
-rule", `prompt.py:39`). What a refusal must never be is an exception that ends the run,
+Through `WriteGate.write_tasks`, where a `due_at` is placed as the minute before the deadline:
+
+| Proposed write | Created | Refused | Held for approval | Notes |
+|---|---|---|---|---|
+| Due Thu 10:00 (focus block) | none | `focus_block` | none | none |
+| Mark task 7 done | none | `never_mark_done` | none | none |
+| Due Thu 20:00 (after hours) | none | none | `working_hours` | none |
+| Due Thu 15:00, "prep the client call" | task 1 | none | none | `Preference set aside (client_calls_late_morning)` |
+
+That is section 5 again. A hard refusal is fail open in exactly the sense decision 2 means:
+the run continues, the model reads which rule stopped it, and it can do the permitted thing
+instead, which is what the system prompt asks of it ("If a rule stops you, say which rule, by
+its code", `prompt.py:51`). What a refusal must never be is an exception that ends the run,
 because then the rule's name reaches a log and not the person who asked.
 
-Two things to carry into the wiring. First, a refusal that the model *keeps* retrying is the
-permanently broken tool of section 5, and the same step limit bounds it; a refusal is
-deterministic (`engine.py:8-9`), so a retry of the same action can never succeed. Second, the
-"never done" rule is already enforced inside `write_tasks` (`tools_tasks.py:59-60`) and again
-in the engine (`engine.py:256-263`), and they disagree: the engine allows a task I confirmed
-(`confirmed_done_task_ids`), the tool refuses every `done`. One of the two has to win when
-the gate is wired, or the model will read two different answers to the same question.
+Two things this note carried into the wiring, and what became of them. First, a refusal that
+the model *keeps* retrying is the permanently broken tool of section 5, and the same step
+limit bounds it; a refusal is deterministic (`engine.py:8-9`), so a retry of the same action
+can never succeed. That still holds. Second, "never done" was enforced twice, and the two
+disagreed:
 
-## 7. What this repo does today, and the one change it should make
+| | Before f0593a3 | Now |
+|---|---|---|
+| Where "never done" was refused | inside `write_tasks` (then `tools_tasks.py:59-60`), and again in the engine | only in the engine (`engine.py:250-257`), reached through the gate |
+| A task I confirmed (`tasks.agreed_by_me`) | the tool refused every `done`; the engine allowed it | allowed |
+| What the model read | `{"error": "hard rule: never mark a task done..."}` | a `refused` entry naming `never_mark_done` |
+
+The gate won, and it is now the single place a write is allowed, refused or held.
+
+## 7. What this repo does today, and the one change it made
 
 | Property | Today | Evidence |
 |---|---|---|
-| Unknown tool, bad arguments, tool raising: all become results | yes, 9 error cases out of 11 calls, none raised | section 3; `loop.py:82-97` |
-| Errors are actionable | yes, with one empty location | section 3; `loop.py:94` |
-| Bounded by a step limit, reported as `step_limit` | yes | section 5; `loop.py:33,77-79` |
-| Unknown argument keys fail | **no**, silently dropped on all three tools | section 4 |
-| Schemas strict-mode ready | no, `additionalProperties` absent | section 1 |
-| Errors flagged as errors to the provider | not yet: the error is only a key in JSON content of a `role: tool` message (`loop.py:68-75`); the Anthropic API wants a `tool_result` with `is_error: true` | handle-tool-calls page |
+| Unknown tool, bad arguments, tool raising: all become results | yes, 9 error cases and 1 gate refusal out of 11 calls, none raised | section 3; `loop.py:92-107` |
+| Errors are actionable | yes, with one empty location | section 3; `loop.py:104` |
+| Bounded by a step limit, reported as `step_limit` | yes | section 5; `loop.py:41,87-89` |
+| Unknown argument keys fail | **yes since caf36c3**; before, silently dropped on all three tools | section 4 |
+| Schemas strict-mode ready | `additionalProperties: false` now, yes; `minimum`, `maximum` and `minLength` still need the SDK to move them | sections 1, 3 |
+| Errors flagged as errors to the provider | not yet: the error is only a key in JSON content of a `role: tool` message (`loop.py:78-85`); the Anthropic API wants a `tool_result` with `is_error: true` | handle-tool-calls page |
 
-**The one improvement: forbid unknown keys on every tool argument model.** Add
-`model_config = ConfigDict(extra="forbid")` to `NewTask`, `TaskUpdate` and `WriteTasksArgs`
-(`tools_tasks.py:21,30,40`), `CalendarWindowArgs` (`tools_calendar.py:25`) and
-`SearchTranscriptsArgs` (`tools_transcripts.py:24`), exactly as `_Shape` already does for
-policy rows (`rules.py:31-34`). Test-first: a scripted run that sends `{"creates": [...]}`
-must get an error naming `creates`, and must write no row.
+**The one improvement: forbid unknown keys on every tool argument model. Done in caf36c3.**
+`model_config = ConfigDict(extra="forbid")` is now on `NewTask`, `TaskUpdate` and
+`WriteTasksArgs` (`tools_tasks.py:25,38,50`), `CalendarWindowArgs` (`tools_calendar.py:29`)
+and `SearchTranscriptsArgs` (`tools_transcripts.py:25`), exactly as `_Shape` does for policy
+rows (`rules.py:33-36`). Test-first, as proposed: a scripted run that sends
+`{"creates": [...]}` gets an error naming `creates`, and writes no row.
 
-Why this one and not the others. It is the only finding where fail open *does not happen*:
-every other gap produces a readable error the model can repair, and this one produces a
+Why this one and not the others. It was the only finding where fail open *did not happen*:
+every other gap produces a readable error the model can repair, and this one produced a
 confident success with nothing written. It costs one line per model. And it is also the first
 step to strict mode, which requires `additionalProperties: false`.
 
@@ -283,20 +313,20 @@ step to strict mode, which requires `additionalProperties: false`.
 | Claim | The evidence behind it |
 |---|---|
 | The description is prompt text, and the most important part of the tool | define-tools: "by far the most important factor in tool performance" |
-| Design the response for the model's next step, not for completeness | `free_slots` saves the model arithmetic it could get wrong (`tools_calendar.py:86`) |
+| Design the response for the model's next step, not for completeness | `free_slots` saves the model arithmetic it could get wrong (`tools_calendar.py:91`) |
 | Strict mode fixes types, not meaning | 3 validators and 4 constraints here that no schema can enforce |
 | Fail open on the model's mistakes | one bad argument: completed in 3 calls open, dead in 1 closed |
 | Fail closed on your own | `IncompleteContext`, `UnknownRule` raise by design |
 | Fail open is only safe with a bound | a dead tool costs exactly `max_steps` model calls: 1, 3, 8, 20 |
 | A refusal is a result, not an exception | the engine returns a `Decision`; the model says which rule |
-| The dangerous failure is the one that raises no error | `creates` for `create`: completed, "Saved", 0 rows |
+| The dangerous failure is the one that raises no error | `creates` for `create`, before caf36c3: completed, "Saved", 0 rows. Now an error, and a repair writes 1 |
 
 The thing I got wrong going in: I thought the risk in fail open was the loop, a model burning
 steps on a tool that will never work, and I came to defend the step limit. The step limit is
 fine; section 5 shows it is exact. The real risk is the opposite case, where the tool never
 fails at all. Fail open is a promise that every mistake becomes an error the model can read,
-and that promise is only as good as the validation behind it. `extra="ignore"` breaks it
-quietly, on the one tool that writes.
+and that promise is only as good as the validation behind it. `extra="ignore"` broke it
+quietly, on the one tool that writes, until caf36c3.
 
 ## Sources
 
@@ -310,19 +340,21 @@ quietly, on the one tool that writes.
 
 ## Appendix: the script's output
 
-Verbatim, from `uv run python docs/notes/scripts/2026-09-30-tool-calling.py` on 2026-09-30.
+Verbatim, from `uv run python docs/notes/scripts/2026-09-30-tool-calling.py` on 2026-09-30,
+re-run after Phase 5 against the new `build_tools` API.
 
 ```
 ==============================================================================
 1. What the model is shown for each tool: name, description, input schema
 ==============================================================================
 tool                   desc words props required           addlProps strict cannot enforce    python-only validators
-read_calendar_window           37     3 start,end             absent -                        _aware,_ordered
-search_transcripts             37     5 query                 absent maximum,minLength,minimum _aware
-write_tasks                    44     2 (none)                absent minLength                -
+read_calendar_window           42     3 start,end              False -                        _aware,_ordered
+search_transcripts             37     5 query                  False maximum,minLength,minimum _aware
+write_tasks                   110     2 (none)                 False minLength                -
 
 search_transcripts input_schema, exactly as pydantic emits it:
 {
+  "additionalProperties": false,
   "properties": {
     "query": {
       "description": "What to look for: a topic, a promise, a name.",
@@ -381,35 +413,39 @@ search_transcripts input_schema, exactly as pydantic emits it:
 ==============================================================================
 2. Malformed calls through loop._invoke: raised, or a result the model can read?
 ==============================================================================
-case                   raised error  what the model reads
-unknown tool name      no     yes    {"error": "unknown tool 'read_calendar'; available: ['read_calendar_window', 'search_transcri...
-missing required arg   no     yes    {"error": "invalid arguments for 'read_calendar_window': start: Input should be a valid datet...
-naive datetime         no     yes    {"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone...
-end before start       no     yes    {"error": "invalid arguments for 'read_calendar_window': : Value error, end must be after sta...
-wrong type             no     yes    {"error": "invalid arguments for 'search_transcripts': limit: Input should be a valid integer...
-out of range           no     yes    {"error": "invalid arguments for 'search_transcripts': limit: Input should be less than or eq...
-enum miss              no     yes    {"error": "invalid arguments for 'write_tasks': create.0.urgency: Input should be 'hard', 'mi...
-tool-level refusal     no     yes    {"error": "hard rule: never mark a task done that I did not confirm. Leave status alone, or s...
-tool raises            no     yes    {"error": "'search_transcripts' failed: ConnectionError: connection to server at localhost:54...
-misspelt key           no     no     {"created": [], "updated": []}
-valid call             no     no     {"window": {"start": "2026-10-01T10:00:00+05:30", "end": "2026-10-02T10:00:00+05:30"}, "meeti...
+case                   raised flagged  what the model reads
+unknown tool name      no     error    {"error": "unknown tool 'read_calendar'; available: ['read_calendar_window', 'search_transcri...
+missing required arg   no     error    {"error": "invalid arguments for 'read_calendar_window': start: Input should be a valid datet...
+naive datetime         no     error    {"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone...
+end before start       no     error    {"error": "invalid arguments for 'read_calendar_window': : Value error, end must be after sta...
+wrong type             no     error    {"error": "invalid arguments for 'search_transcripts': limit: Input should be a valid integer...
+out of range           no     error    {"error": "invalid arguments for 'search_transcripts': limit: Input should be less than or eq...
+enum miss              no     error    {"error": "invalid arguments for 'write_tasks': create.0.urgency: Input should be 'hard', 'mi...
+gate refusal (done)    no     refused  {"created": [], "updated": [], "refused": [{"item": "update[0]", "outcome": "refuse", "rule":...
+tool raises            no     error    {"error": "'search_transcripts' failed: ConnectionError: connection to server at localhost:54...
+misspelt key           no     error    {"error": "invalid arguments for 'write_tasks': creates: Extra inputs are not permitted"}
+valid call             no     no       {"window": {"start": "2026-10-01T10:00:00+05:30", "end": "2026-10-02T10:00:00+05:30"}, "meeti...
 
-Full text of three of them, as the model would read it:
+Full text of four of them, as the model would read it:
   unknown tool name: {"error": "unknown tool 'read_calendar'; available: ['read_calendar_window', 'search_transcripts', 'write_tasks']"}
-  naive datetime: {"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30; end: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30"}
+  naive datetime: {"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30; end: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30"}
   tool raises: {"error": "'search_transcripts' failed: ConnectionError: connection to server at localhost:5432 refused"}
+  misspelt key: {"error": "invalid arguments for 'write_tasks': creates: Extra inputs are not permitted"}
+
+The gate's refusal of 'done', as the model reads it:
+  "Not written. Refused by never_mark_done (hard): Never mark a task done that I did not confirm. task 7 would be marked done without my confirmation. A hard rule has no override; tell me which rule stopped it."
 
 ==============================================================================
-3. The misspelt key: extra='ignore' today vs extra='forbid' proposed
+3. The misspelt key: extra='ignore' before caf36c3 vs extra='forbid' now
 ==============================================================================
-today    : validates, create=[], update=[]  (the key vanished)
-proposed : invalid arguments for 'write_tasks': creates: Extra inputs are not permitted
-schema additionalProperties, today vs proposed: absent vs False
+before : validates, create=[], update=[]  (the key vanished)
+now    : invalid arguments for 'write_tasks': creates: Extra inputs are not permitted
+schema additionalProperties, before vs now: absent vs False
 
-Every tool's argument model, sent one unknown key alongside a valid call:
-  read_calendar_window   accepted, 'bogus' silently dropped
-  search_transcripts     accepted, 'bogus' silently dropped
-  write_tasks            accepted, 'bogus' silently dropped
+Every tool's argument model now, sent one unknown key alongside a valid call:
+  read_calendar_window   rejected: bogus: Extra inputs are not permitted
+  search_transcripts     rejected: bogus: Extra inputs are not permitted
+  write_tasks            rejected: bogus: Extra inputs are not permitted
 
 ==============================================================================
 4. One bad call, then a corrected one: fail open vs fail closed
@@ -419,15 +455,17 @@ fail open    completed                                        3     5  Thursday 
 fail closed  dead at model call 1: ValidationError            1     -  None
 
 What the fail-open model read before its second call:
-  {"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30; end: Value error, must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30"}
+  {"error": "invalid arguments for 'read_calendar_window': start: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30; end: Value error, must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30"}
 
 ==============================================================================
-5. The same fail-open loop, when the mistake never surfaces
+5. The misspelt key through the fail-open loop: now an error the model can repair
 ==============================================================================
-outcome : completed
-tool out: {'created': [], 'updated': []}
-answer  : Saved: send deck, urgency hard.
-rows written: 0 (create=[] reached write_tasks, which wrote nothing and said so)
+outcome      : completed
+first call   : {"error": "invalid arguments for 'write_tasks': creates: Extra inputs are not permitted"}
+second call  : {'created': [1], 'updated': [], 'refused': [], 'awaiting_approval': [], 'policy_errors': [], 'notes': []}
+answer       : Saved: send deck, urgency hard.
+rows written : 1
+before caf36c3 the first call validated as create=[] and returned {'created': [], 'updated': []}: completed, 'Saved', 0 rows, and no error to repair
 
 ==============================================================================
 6. A permanently broken tool, bounded only by max_steps
@@ -458,4 +496,12 @@ The first refusal in full, as the model would read it:
   ],
   "needs": null
 }
+
+The same kinds of write through the real gate (WriteGate.write_tasks), as the model reads
+them. A due_at is placed as the minute before the deadline (gate.DUE_SPAN):
+proposed write         created refused            held           notes
+due Thu 10:00 (focus)  []      focus_block        -              -
+mark task 7 done       []      never_mark_done    -              -
+due Thu 20:00 (late)   []      -                  working_hours  -
+due Thu 15:00 client   [1]     -                  -              create[0]: Preference set aside (client_calls_late_mornin...
 ```

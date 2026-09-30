@@ -7,19 +7,28 @@ and the model is either the repo's ScriptedModel or a model that never stops ask
 
     uv run python docs/notes/scripts/2026-09-30-tool-calling.py
 
-Nothing under src/ is changed. Where the note proposes a change, the script shows it on a
-subclass defined here, so the proposal is measured before it is argued.
+Nothing under src/ is changed. Where the note compares with behaviour src/ no longer has
+(``extra="ignore"`` before caf36c3), the script rebuilds the old behaviour on a subclass
+defined here, so the before and after are both measured, not remembered.
+
+Updated after Phase 5 (f0593a3): ``build_tools`` now takes the loaded policy rows and the
+run's ``WriteGate`` instead of ``now`` and ``run_id``, and "never mark done" is refused by
+the gate, not by ``write_tasks``. The policy rows are the migration 0006 seed, read from the
+migration file itself, so the script cannot drift from the seeded numbers.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
+from pathlib import Path
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 
+from agent_lab.agent.gate import WriteGate
 from agent_lab.agent.loop import _invoke, run
 from agent_lab.agent.policy.engine import evaluate
 from agent_lab.agent.policy.rules import LoadedPolicy, parse_rule
@@ -63,10 +72,28 @@ class _NoRows:
 
 
 class EmptySession:
-    """A database that answers every query with no rows. Enough for the two read tools."""
+    """A database with no rows. Enough for the two read tools and for the gate's context.
+
+    ``add`` and ``flush`` stand in for an insert: a flushed object gets the next id, so an
+    allowed write through the gate reports a created id the way Postgres would.
+    """
+
+    def __init__(self) -> None:
+        self.added: list[Any] = []
 
     def execute(self, *args: object, **kwargs: object) -> _NoRows:
         return _NoRows()
+
+    def get(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+
+    def flush(self) -> None:
+        for i, obj in enumerate(self.added, start=1):
+            if getattr(obj, "id", None) is None:
+                obj.id = i
 
 
 class DownSession:
@@ -76,8 +103,36 @@ class DownSession:
         raise ConnectionError("connection to server at localhost:5432 refused")
 
 
+def _seed_rows() -> list[tuple[str, str, str, str, dict[str, Any]]]:
+    """The thirteen rows migration 0006 seeds, read from the migration file itself."""
+    root = Path(__file__).resolve().parents[3]
+    path = root / "migrations/versions/0006_seed_policies.py"
+    spec = importlib.util.spec_from_file_location("seed_0006_notes", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    seed: list[tuple[str, str, str, str, dict[str, Any]]] = module.SEED
+    return seed
+
+
+SEEDED = tuple(
+    LoadedPolicy(
+        id=i,
+        code=code,
+        tier=cast(Any, kind),
+        description=description,
+        params=parse_rule(code, rule_json),
+        active=True,
+    )
+    for i, (code, kind, _severity, description, rule_json) in enumerate(_seed_rows(), start=1)
+)
+
+
 def toolkit(session: object) -> list[Tool]:
-    return build_tools(cast(Session, session), FakeEmbedder(), now=lambda: NOW, run_id=None)
+    """The real toolkit, exactly as execute() builds it: seeded rows, one gate per run."""
+    db = cast(Session, session)
+    gate = WriteGate(db, SEEDED, now=lambda: NOW, tz="Asia/Kolkata", run_id=None)
+    return build_tools(db, FakeEmbedder(), policies=SEEDED, gate=gate)
 
 
 # ------------------------------------------------------ 1. what the model is shown
@@ -155,7 +210,7 @@ CASES: list[tuple[str, object, ToolCall]] = [
         ToolCall("write_tasks", {"create": [{"text": "send deck", "urgency": "urgent"}]}),
     ),
     (
-        "tool-level refusal",
+        "gate refusal (done)",
         EmptySession(),
         ToolCall("write_tasks", {"update": [{"id": 7, "status": "done"}]}),
     ),
@@ -168,7 +223,21 @@ CASES: list[tuple[str, object, ToolCall]] = [
     ("valid call", EmptySession(), ToolCall("read_calendar_window", aware)),
 ]
 
-print(f"{'case':22s} {'raised':6s} {'error':5s}  what the model reads")
+
+def flagged(output: Any) -> str:
+    """'error' for a tool error, 'refused'/'held' for a gate outcome, 'no' for success."""
+    if not isinstance(output, dict):
+        return "no"
+    if "error" in output:
+        return "error"
+    if output.get("refused"):
+        return "refused"
+    if output.get("awaiting_approval"):
+        return "held"
+    return "no"
+
+
+print(f"{'case':22s} {'raised':6s} {'flagged':7s}  what the model reads")
 results: dict[str, Any] = {}
 for label, session, call in CASES:
     by_name = {t.name: t for t in toolkit(session)}
@@ -179,39 +248,40 @@ for label, session, call in CASES:
         output = f"{type(exc).__name__}: {exc}"
         raised = "YES"
     results[label] = output
-    is_error = "yes" if isinstance(output, dict) and "error" in output else "no"
-    print(f"{label:22s} {raised:6s} {is_error:5s}  {short(output)}")
+    print(f"{label:22s} {raised:6s} {flagged(output):7s}  {short(output)}")
 
-print("\nFull text of three of them, as the model would read it:")
-for label in ("unknown tool name", "naive datetime", "tool raises"):
+print("\nFull text of four of them, as the model would read it:")
+for label in ("unknown tool name", "naive datetime", "tool raises", "misspelt key"):
     print(f"  {label}: {json.dumps(results[label])}")
+print("\nThe gate's refusal of 'done', as the model reads it:")
+print(f"  {json.dumps(results['gate refusal (done)']['refused'][0]['message'])}")
 
 
-# ------------------------------------------------- 3. the misspelt key, and the fix
-rule("3. The misspelt key: extra='ignore' today vs extra='forbid' proposed")
+# ------------------------------------------------- 3. the misspelt key, before and after
+rule("3. The misspelt key: extra='ignore' before caf36c3 vs extra='forbid' now")
 
 
-class ForbidWriteTasksArgs(WriteTasksArgs):
-    """The proposed change, applied here on a subclass. src/ is untouched."""
+class IgnoreWriteTasksArgs(WriteTasksArgs):
+    """The old behaviour, rebuilt here on a subclass. src/ now forbids unknown keys."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
 
 bad = {"creates": [{"text": "send deck", "urgency": "hard"}]}
-today = WriteTasksArgs.model_validate(bad)
-print(f"today    : validates, create={today.create}, update={today.update}  (the key vanished)")
+before = IgnoreWriteTasksArgs.model_validate(bad)
+print(f"before : validates, create={before.create}, update={before.update}  (the key vanished)")
 try:
-    ForbidWriteTasksArgs.model_validate(bad)
+    WriteTasksArgs.model_validate(bad)
 except ValidationError as exc:
     problems = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()]
-    print(f"proposed : invalid arguments for 'write_tasks': {'; '.join(problems)}")
+    print(f"now    : invalid arguments for 'write_tasks': {'; '.join(problems)}")
 print(
-    "schema additionalProperties, today vs proposed: "
-    f"{WriteTasksArgs.model_json_schema().get('additionalProperties', 'absent')} vs "
-    f"{ForbidWriteTasksArgs.model_json_schema().get('additionalProperties', 'absent')}"
+    "schema additionalProperties, before vs now: "
+    f"{IgnoreWriteTasksArgs.model_json_schema().get('additionalProperties', 'absent')} vs "
+    f"{WriteTasksArgs.model_json_schema().get('additionalProperties', 'absent')}"
 )
 
-print("\nEvery tool's argument model, sent one unknown key alongside a valid call:")
+print("\nEvery tool's argument model now, sent one unknown key alongside a valid call:")
 VALID: dict[str, dict[str, Any]] = {
     "read_calendar_window": dict(aware),
     "search_transcripts": {"query": "pricing"},
@@ -222,7 +292,7 @@ for tool in toolkit(EmptySession()):
         tool.args_model.model_validate({**VALID[tool.name], "bogus": 1})
         verdict = "accepted, 'bogus' silently dropped"
     except ValidationError:
-        verdict = "rejected"
+        verdict = "rejected: bogus: Extra inputs are not permitted"
     print(f"  {tool.name:22s} {verdict}")
 
 
@@ -275,19 +345,28 @@ print(f"  {open_model.seen_messages[1][-1]['content']}")
 
 
 # --------------------------------------- 5. the misspelt key through a full run
-rule("5. The same fail-open loop, when the mistake never surfaces")
+rule("5. The misspelt key through the fail-open loop: now an error the model can repair")
 
-silent_model = ScriptedModel(
+good = {"create": [{"text": "send deck", "urgency": "hard"}]}
+repair_session = EmptySession()
+repair_model = ScriptedModel(
     [
         reply(ToolCall("write_tasks", bad, id="w1")),
+        reply(ToolCall("write_tasks", good, id="w2")),
         reply(text="Saved: send deck, urgency hard."),
     ]
 )
-silent = run("Log that I owe the deck", silent_model, toolkit(EmptySession()), max_steps=8)
-print(f"outcome : {silent.outcome}")
-print(f"tool out: {silent.steps[1].tool_output}")
-print(f"answer  : {silent.answer}")
-print("rows written: 0 (create=[] reached write_tasks, which wrote nothing and said so)")
+repaired = run("Log that I owe the deck", repair_model, toolkit(repair_session), max_steps=8)
+tool_steps = [s for s in repaired.steps if s.kind == "tool"]
+print(f"outcome      : {repaired.outcome}")
+print(f"first call   : {short(tool_steps[0].tool_output, 110)}")
+print(f"second call  : {tool_steps[1].tool_output}")
+print(f"answer       : {repaired.answer}")
+print(f"rows written : {len(repair_session.added)}")
+print(
+    "before caf36c3 the first call validated as create=[] and returned "
+    "{'created': [], 'updated': []}: completed, 'Saved', 0 rows, and no error to repair"
+)
 
 
 # ------------------------------------ 6. the step limit bounds a permanently broken tool
@@ -326,50 +405,12 @@ print(f"answer on step_limit: {bounded.answer}")
 # ------------------------------------------ 7. a policy refusal is also a readable result
 rule("7. The policy gate: a refusal is a Decision the model can read, not an exception")
 
-ROWS = [
-    (
-        "fixed_meeting_immutable",
-        "hard",
-        "Never move, shorten, or propose moving a meeting marked important or fixed.",
-    ),
-    ("focus_block", "hard", "Never place or propose anything inside the focus block."),
-    ("never_mark_done", "hard", "Never mark a task done that I did not confirm."),
-    ("working_hours", "middle", "Nothing outside working hours or on weekends."),
-    ("prefer_short_slots", "soft", "Prefer 30-minute slots over 60."),
-]
-PARAMS: dict[str, dict[str, Any]] = {
-    "fixed_meeting_immutable": {"markers": ["important", "fixed"]},
-    "focus_block": {
-        "start": "09:00",
-        "end": "11:00",
-        "days": [1, 2, 3, 4, 5],
-        "tz": "Asia/Kolkata",
-    },
-    "never_mark_done": {},
-    "working_hours": {
-        "start": "10:00",
-        "end": "19:00",
-        "days": [1, 2, 3, 4, 5],
-        "tz": "Asia/Kolkata",
-    },
-    "prefer_short_slots": {"minutes": 30},
-}
-policies = [
-    LoadedPolicy(
-        id=i,
-        code=code,
-        tier=cast(Any, tier),
-        description=text,
-        params=parse_rule(code, PARAMS[code]),
-        active=True,
-    )
-    for i, (code, tier, text) in enumerate(ROWS, start=1)
-]
+policies = list(SEEDED)
 context = Context(now=NOW, tz="Asia/Kolkata")
 
 
 def as_tool_result(decision: Decision) -> dict[str, Any]:
-    """How a refusal could reach the model: the same {'error': ...} shape as any failure."""
+    """The engine's Decision, condensed. The gate's own rendering follows the table."""
     if decision.outcome == "allow":
         return {"allowed": True, "notes": [n.note for n in decision.notes]}
     return {
@@ -426,3 +467,28 @@ for label, action in ACTIONS:
 
 print("\nThe first refusal in full, as the model would read it:")
 print(json.dumps(as_tool_result(evaluate(ACTIONS[0][1], context, policies)), indent=2))
+
+print("\nThe same kinds of write through the real gate (WriteGate.write_tasks), as the model reads")
+print("them. A due_at is placed as the minute before the deadline (gate.DUE_SPAN):")
+GATED: list[tuple[str, dict[str, Any]]] = [
+    (
+        "due Thu 10:00 (focus)",
+        {"create": [{"text": "send deck", "due_at": "2026-10-01T10:00:00+05:30"}]},
+    ),
+    ("mark task 7 done", {"update": [{"id": 7, "status": "done"}]}),
+    (
+        "due Thu 20:00 (late)",
+        {"create": [{"text": "send deck", "due_at": "2026-10-01T20:00:00+05:30"}]},
+    ),
+    (
+        "due Thu 15:00 client",
+        {"create": [{"text": "prep the client call", "due_at": "2026-10-01T15:00:00+05:30"}]},
+    ),
+]
+print(f"{'proposed write':22s} {'created':7s} {'refused':18s} {'held':14s} notes")
+for label, arguments in GATED:
+    out = _invoke({t.name: t for t in toolkit(EmptySession())}, ToolCall("write_tasks", arguments))
+    refused = ",".join(r["rule"] for r in out["refused"]) or "-"
+    held = ",".join(",".join(h["rules"]) for h in out["awaiting_approval"]) or "-"
+    notes = short("; ".join(out["notes"]), 60) or "-"
+    print(f"{label:22s} {out['created']!s:7s} {refused:18s} {held:14s} {notes}")
