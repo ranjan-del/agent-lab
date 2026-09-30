@@ -248,7 +248,11 @@ class Policy(Base):
     """
 
     __tablename__ = "policies"
-    __table_args__ = (UniqueConstraint("code", name="uq_policies_code"),)
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_policies_code"),
+        CheckConstraint("kind IN ('hard', 'middle', 'soft')", name="ck_policies_kind"),
+        CheckConstraint("severity IN ('refuse', 'ask', 'advise')", name="ck_policies_severity"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)

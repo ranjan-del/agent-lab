@@ -42,6 +42,20 @@ def _test_database_url() -> str:
     return os.environ.get("TEST_DATABASE_URL") or settings.database_url + "_test"
 
 
+def alembic_config_for(url: str) -> Config:
+    """The same alembic wiring the engine fixture uses, for tests that migrate on purpose."""
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("script_location", "migrations")
+    config.set_main_option("sqlalchemy.url", url)
+    return config
+
+
+@pytest.fixture
+def alembic_config(engine) -> Config:
+    """Alembic pointed at the migrated test database. Depends on ``engine`` so head is applied."""
+    return alembic_config_for(_test_database_url())
+
+
 @pytest.fixture(scope="session")
 def engine():
     """Create the test database if needed and migrate it exactly the way production is.
@@ -63,9 +77,7 @@ def engine():
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"no database reachable: {type(exc).__name__}: {exc}")
 
-    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    config.set_main_option("script_location", "migrations")
-    config.set_main_option("sqlalchemy.url", _test_database_url())
+    config = alembic_config_for(_test_database_url())
     os.environ["DATABASE_URL"] = _test_database_url()
     command.upgrade(config, "head")
 
