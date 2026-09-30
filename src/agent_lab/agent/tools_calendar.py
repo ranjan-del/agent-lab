@@ -10,7 +10,7 @@ import datetime as dt
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,8 @@ MIN_SLOT = dt.timedelta(minutes=30)
 
 class CalendarWindowArgs(BaseModel):
     """What the model must supply: an aware start and end. Everything else has a default."""
+
+    model_config = ConfigDict(extra="forbid")
 
     start: dt.datetime
     end: dt.datetime

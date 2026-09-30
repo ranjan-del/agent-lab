@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from agent_lab.models import Task
@@ -19,6 +19,8 @@ Urgency = Literal["hard", "middle", "soft"]
 
 
 class NewTask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     text: str = Field(min_length=1, description="What I agreed to do, in one sentence.")
     urgency: Urgency = "middle"
     due_at: dt.datetime | None = None
@@ -30,6 +32,8 @@ class NewTask(BaseModel):
 class TaskUpdate(BaseModel):
     """Only the fields given are changed. ``status`` may be 'open' or 'dropped'; never 'done'."""
 
+    model_config = ConfigDict(extra="forbid")
+
     id: int
     text: str | None = Field(default=None, min_length=1)
     urgency: Urgency | None = None
@@ -38,6 +42,10 @@ class TaskUpdate(BaseModel):
 
 
 class WriteTasksArgs(BaseModel):
+    """Unknown keys are an error: ``creates`` for ``create`` must not validate as nothing."""
+
+    model_config = ConfigDict(extra="forbid")
+
     create: list[NewTask] = Field(default_factory=list)
     update: list[TaskUpdate] = Field(default_factory=list)
 
