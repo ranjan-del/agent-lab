@@ -1,8 +1,11 @@
 """Tool 3: write the task list. The agent's only writer, and fully reversible (SPEC section 2).
 
-Create, update and close rows in ``tasks``. Nothing here leaves the database. One rule is
-enforced right here rather than waiting for the policy engine, because it is a hard rule with
-no override: the agent never marks a task done. Only I do.
+Create, update and close rows in ``tasks``. Nothing here leaves the database.
+
+This function writes what it is given and decides nothing. The policy gate (``gate.py``) is
+the single place a write is allowed, refused or held, and ``execute()`` only ever reaches
+this function through it. That includes "never mark a task done that I did not confirm",
+which used to be refused here as well, with a different answer from the engine's.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ class NewTask(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    """Only the fields given are changed. ``status`` may be 'open' or 'dropped'; never 'done'."""
+    """Only the fields given are changed. 'done' passes the gate only for a task I confirmed."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -50,12 +53,6 @@ class WriteTasksArgs(BaseModel):
     update: list[TaskUpdate] = Field(default_factory=list)
 
 
-NEVER_DONE = (
-    "hard rule: never mark a task done that I did not confirm. "
-    "Leave status alone, or set it to 'dropped' if the task no longer applies."
-)
-
-
 def write_tasks(
     session: Session,
     args: WriteTasksArgs,
@@ -63,10 +60,6 @@ def write_tasks(
     now: dt.datetime,
     run_id: int | None = None,
 ) -> dict[str, Any]:
-    # Refuse before writing anything, so a rejected batch leaves no half-applied rows.
-    if any(u.status == "done" for u in args.update):
-        return {"error": NEVER_DONE, "created": [], "updated": []}
-
     created: list[int] = []
     for item in args.create:
         task = Task(

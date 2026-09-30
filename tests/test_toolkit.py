@@ -5,6 +5,7 @@ from typing import cast
 
 from sqlalchemy.orm import Session
 
+from agent_lab.agent.gate import WriteGate
 from agent_lab.agent.toolkit import build_tools
 from agent_lab.embeddings.fake import FakeEmbedder
 from policy_seed import seed_policies
@@ -13,13 +14,10 @@ NOW = dt.datetime(2026, 9, 21, 12, tzinfo=dt.UTC)
 
 
 def _descriptions(**overrides: dict[str, object]) -> dict[str, str]:
-    tools = build_tools(
-        cast(Session, object()),  # building the tools runs no query
-        FakeEmbedder(),
-        now=lambda: NOW,
-        run_id=None,
-        policies=seed_policies(**overrides),
-    )
+    session = cast(Session, object())  # building the tools runs no query
+    policies = seed_policies(**overrides)
+    gate = WriteGate(session, policies, now=lambda: NOW, tz="Asia/Kolkata", run_id=None)
+    tools = build_tools(session, FakeEmbedder(), policies=policies, gate=gate)
     return {t.name: t.description for t in tools}
 
 

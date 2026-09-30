@@ -99,7 +99,9 @@ def test_a_scripted_task_reads_the_calendar_writes_a_task_and_is_fully_recorded(
         .scalars()
         .all()
     )
-    assert [s.kind for s in steps] == ["model", "tool", "model", "tool", "model"]
+    # the write passed the policy gate first, and its decision is in the trace too
+    assert [s.kind for s in steps] == ["model", "tool", "model", "policy", "tool", "model"]
+    assert steps[3].output["outcome"] == "allow"
     assert [s.tool_name for s in steps if s.kind == "tool"] == [
         "read_calendar_window",
         "write_tasks",

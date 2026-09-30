@@ -59,8 +59,11 @@ def test_update_changes_the_named_fields_and_stamps_updated_at(session: Session)
     assert row.updated_at == later
 
 
-def test_the_agent_may_drop_a_task_but_never_mark_it_done(session: Session) -> None:
-    """SPEC section 3, hard tier: never mark a task done that I did not confirm."""
+def test_write_tasks_writes_what_it_is_given_and_leaves_deciding_to_the_gate(
+    session: Session,
+) -> None:
+    """The done refusal moved to the policy gate (test_policy_gate.py), the single source of
+    truth. The bare writer no longer disagrees with the engine about a confirmed task."""
     from agent_lab.agent.tools_tasks import TaskUpdate
 
     now = dt.datetime(2026, 9, 7, 12, tzinfo=IST)
@@ -68,14 +71,9 @@ def test_the_agent_may_drop_a_task_but_never_mark_it_done(session: Session) -> N
         session, WriteTasksArgs(create=[NewTask(text="Send the recording")]), now=now
     )["created"][0]
 
-    refused = write_tasks(
-        session, WriteTasksArgs(update=[TaskUpdate(id=created, status="done")]), now=now
-    )
-    assert session.get(Task, created).status == "open"
-    assert "error" in refused and "never mark a task done" in refused["error"]
-
-    dropped = write_tasks(
+    out = write_tasks(
         session, WriteTasksArgs(update=[TaskUpdate(id=created, status="dropped")]), now=now
     )
-    assert dropped["updated"] == [created]
+
+    assert out == {"created": [], "updated": [created]}
     assert session.get(Task, created).status == "dropped"
