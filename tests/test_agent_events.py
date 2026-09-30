@@ -69,3 +69,26 @@ def test_the_json_lines_sink_writes_one_parseable_line_per_step() -> None:
     assert lines[1]["tool"] == "ping" and lines[1]["output"] == "pong"
     assert lines[0]["tokens"] == {"in": 10, "out": 4}
     assert all("latency_ms" in e and "ordinal" in e for e in lines)
+
+
+def test_a_policy_step_is_reported_as_a_policy_decision_event() -> None:
+    from agent_lab.agent.events import as_event
+    from agent_lab.agent.types import Step
+
+    step = Step(
+        ordinal=3,
+        kind="policy",
+        tool_name="write_tasks",
+        tool_input={"item": "create[0]", "action": "place_slot"},
+        tool_output={"outcome": "refuse", "code": "focus_block"},
+        latency_ms=0,
+    )
+
+    assert as_event(step) == {
+        "event": "policy_decision",
+        "ordinal": 3,
+        "latency_ms": 0,
+        "tool": "write_tasks",
+        "action": {"item": "create[0]", "action": "place_slot"},
+        "decision": {"outcome": "refuse", "code": "focus_block"},
+    }

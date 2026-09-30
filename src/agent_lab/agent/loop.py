@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from pydantic import ValidationError
@@ -20,7 +21,14 @@ def run(
     max_steps: int,
     on_step: Callable[[Step], None] | None = None,
     system: str | None = None,
+    drain: Callable[[], Sequence[Step]] | None = None,
 ) -> RunResult:
+    """Run until the model answers or ``max_steps`` model turns are spent.
+
+    ``drain``, when given, is called after every tool call and returns the steps the tool
+    emitted while it ran (the policy gate's decisions). They are numbered and recorded before
+    the tool's own step, so the trace reads in the order things happened.
+    """
     by_name = {t.name: t for t in tools}
     # The system prompt goes first and never changes within a run, so a provider that caches
     # prompt prefixes can reuse it on every turn. Everything that varies comes after.
@@ -53,6 +61,8 @@ def run(
         for call in reply.tool_calls:
             t0 = time.perf_counter()
             output = _invoke(by_name, call)
+            for emitted in drain() if drain is not None else ():
+                _record(steps, on_step, dataclasses.replace(emitted, ordinal=len(steps) + 1))
             _record(
                 steps,
                 on_step,
