@@ -40,7 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     window_start = now - dt.timedelta(days=args.days_back)
     window_end = now + dt.timedelta(days=args.days_forward)
 
-    events = list(ics.parse(args.path, window_start, window_end))
+    dropped = ics.Dropped()
+    events = list(ics.parse(args.path, window_start, window_end, dropped=dropped))
     key = f"ics:{args.path.name}:{window_start.date()}:{window_end.date()}"
 
     with SessionLocal() as session:
@@ -61,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"occurrences parsed : {len(events)}\n"
+        f"rows dropped       : {dropped.total} "
+        f"(no uid {dropped.no_uid}, all-day/floating {dropped.all_day_or_floating}, "
+        f"no end {dropped.no_end}, zero length {dropped.zero_length})\n"
         f"meetings inserted  : {counts.meetings_inserted}\n"
         f"meetings updated   : {counts.meetings_updated}\n"
         f"people created     : {counts.people_created}\n"
