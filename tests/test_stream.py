@@ -7,7 +7,7 @@ that need a client to go away mid-stream live in test_stream_disconnect.py.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncIterator
 
 import anyio
 import httpx
@@ -17,9 +17,8 @@ from agent_lab.agent.scripted import ScriptedModel
 from agent_lab.agent.types import ModelReply, ToolCall, Usage
 from agent_lab.api.stream import get_run_source, get_stream_timeout
 from agent_lab.main import app
-from agent_lab.sse import Event
 from agent_lab.streaming import ScriptedRunSource
-from sse import parse_sse
+from sse import StallingSource, parse_sse
 
 
 @pytest.fixture
@@ -77,26 +76,6 @@ async def test_the_default_source_needs_no_provider_and_no_database(
     events = parse_sse(response.text)
     assert events[0]["event"] == "run_started"
     assert events[-1]["event"] == "done"
-
-
-class StallingSource:
-    """Yields one token, then waits on an event nobody sets. Records how it was stopped."""
-
-    def __init__(self) -> None:
-        self.started = anyio.Event()
-        self.stopped_by: type[BaseException] | None = None
-        self.finished = False
-
-    async def __call__(self, task: str) -> AsyncGenerator[Event]:
-        try:
-            yield Event("token", {"text": "thinking"})
-            self.started.set()
-            await anyio.Event().wait()
-            self.finished = True
-            yield Event("done", {"outcome": "completed"})
-        except BaseException as exc:
-            self.stopped_by = type(exc)
-            raise
 
 
 async def test_the_deadline_ends_the_stream_with_a_timeout_event_and_stops_the_work(
