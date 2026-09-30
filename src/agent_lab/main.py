@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, Response, status
 from sqlalchemy.orm import Session
 
 from agent_lab import __version__
-from agent_lab.api import stream
+from agent_lab.api import ingest, stream
 from agent_lab.config import settings
 from agent_lab.db import engine, get_session
 from agent_lab.health import DependencyStatus, check_database, check_pgvector
@@ -27,6 +27,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
 app.include_router(stream.router)
+app.include_router(ingest.router)
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
