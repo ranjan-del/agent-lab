@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql shell test ingest task transcript lint typecheck check migrate revision downgrade health clean
+.PHONY: help up down logs ps psql shell test ingest task transcript lint typecheck check migrate revision downgrade health stream clean
 
 .DEFAULT_GOAL := help
 
@@ -29,6 +29,9 @@ shell:         ## Open a shell in the api container
 
 health:        ## Curl /health and show the status code
 	@curl -s -w '\nHTTP %{http_code}\n' http://localhost:8000/health
+
+stream:        ## make stream t="Plan my week" [url=http://localhost:8000]: follow /runs/stream
+	@API_URL="$(or $(url),http://localhost:8000)" scripts/stream.sh "$(or $(t),Plan my week)"
 
 test:          ## Run the test suite
 	uv run pytest
