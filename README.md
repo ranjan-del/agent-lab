@@ -37,3 +37,21 @@ Then `make check` runs lint, types and tests. `make clean` destroys the database
 
 Empty on purpose. Nothing ships here without a number, and there is nothing to measure yet.
 Pass rate, p50 and p95 latency, and cost per task land in weeks 5, 9 and 10.
+
+## Project documentation
+
+Every flagship repository documents the same ten things. Status shows what exists today.
+
+| Section | Document | Status |
+|---|---|---|
+| README | [README.md](README.md) | Written |
+| Architecture | [docs/architecture.md](docs/architecture.md) | Partial |
+| Design decisions | [docs/design-decisions.md](docs/design-decisions.md) | Partial |
+| Benchmarks | [docs/benchmarks.md](docs/benchmarks.md) | Partial |
+| Failure cases | [docs/failure-cases.md](docs/failure-cases.md) | To be written |
+| Evaluation | [docs/evaluation.md](docs/evaluation.md) | Partial |
+| Trade-offs | [docs/trade-offs.md](docs/trade-offs.md) | To be written |
+| Deployment | [docs/deployment.md](docs/deployment.md) | Partial |
+| Cost | [docs/cost.md](docs/cost.md) | Partial |
+| Future work | [docs/future-work.md](docs/future-work.md) | Partial |
+
