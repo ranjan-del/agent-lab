@@ -79,3 +79,21 @@ Stated here so no number above is read as more than it is.
 | One-to-ones and client calls | recognised from title keywords only (`policy_context.py`); a weak signal in both directions |
 | ASK_OVERRIDE has no approval command | a held item is not written and stays in the trace; nothing yet lists the questions or applies an approved item |
 | `docs/explain/load.sql` gives every meeting the same `starts_at` | the uncorrelated LATERAL `random()` runs once (checked: 1 distinct value over 1,000 rows), so the Q2 and Q10 timings in `docs/explain/README.md` are stale until the loader is fixed and re-measured |
+
+## Project documentation
+
+Every flagship repository documents the same ten things. Status shows what exists today.
+
+| Section | Document | Status |
+|---|---|---|
+| README | [README.md](README.md) | Written |
+| Architecture | [docs/architecture.md](docs/architecture.md) | Partial |
+| Design decisions | [docs/design-decisions.md](docs/design-decisions.md) | Partial |
+| Benchmarks | [docs/benchmarks.md](docs/benchmarks.md) | Partial |
+| Failure cases | [docs/failure-cases.md](docs/failure-cases.md) | Partial |
+| Evaluation | [docs/evaluation.md](docs/evaluation.md) | Partial |
+| Trade-offs | [docs/trade-offs.md](docs/trade-offs.md) | To be written |
+| Deployment | [docs/deployment.md](docs/deployment.md) | Partial |
+| Cost | [docs/cost.md](docs/cost.md) | Partial |
+| Future work | [docs/future-work.md](docs/future-work.md) | Partial |
+
