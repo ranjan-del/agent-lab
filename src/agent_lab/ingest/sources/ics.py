@@ -22,7 +22,9 @@ asks of a calendar.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,36 @@ from agent_lab.ingest.types import RawAttendee, RawEvent
 
 SOURCE = "ics"
 
+log = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class Dropped:
+    """What ``parse`` refused to turn into an event, counted by reason.
+
+    Every refusal below is deliberate and stays deliberate. What changed is that the refusal
+    is now counted, because a parser that loses rows without a number poisons every count
+    built on top of it: the ingest output, and from week 4 the eval harness. Window exclusion
+    is not counted here; the window is the caller's question, not lost data.
+
+    Pass one in and read it after the iterator is exhausted. The generator stays lazy.
+    """
+
+    no_uid: int = 0
+    all_day_or_floating: int = 0
+    no_end: int = 0
+    zero_length: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.no_uid + self.all_day_or_floating + self.no_end + self.zero_length
+
+    def note(self, reason: str, uid: str) -> None:
+        """Count one refusal and say so. The log line names the event; the count names the scale."""
+        setattr(self, reason, getattr(self, reason) + 1)
+        log.warning("ics: dropped %s (%s)", uid or "<no uid>", reason)
+
+
 # Google marks rooms and equipment with CUTYPE. Anything that is not an individual is a
 # resource, and a resource must never be treated as a person by the policy engine.
 _RESOURCE_CUTYPES = frozenset({"RESOURCE", "ROOM"})
@@ -42,9 +74,9 @@ def _as_aware(value: Any) -> dt.datetime | None:
     """Return an aware datetime in its ORIGINAL timezone.
 
     Recurrence must be expanded in the timezone the series was written in. "Every Tuesday at
-    10:00 New York time" is a statement about local time, and local time is not a fixed offset
-    from UTC: it shifts at a DST boundary. Expanding in UTC adds a fixed seven days and
-    silently moves every occurrence after the boundary by an hour.
+    ten in the morning, New York time" is a statement about local time, and local time is not
+    a fixed offset from UTC: it shifts at a DST boundary. Expanding in UTC adds a fixed seven
+    days and silently moves every occurrence after the boundary by an hour.
     """
     if isinstance(value, dt.datetime):
         if value.tzinfo is None:
@@ -125,15 +157,34 @@ def _attendees(component: Any) -> tuple[RawAttendee, ...]:
 def _raw_payload(component: Any) -> dict[str, Any]:
     """Keep the original fields, so a parser bug is re-parsed rather than re-fetched."""
     keep = ("SUMMARY", "LOCATION", "STATUS", "UID", "RRULE", "DESCRIPTION", "SEQUENCE")
-    return {k: str(component.get(k)) for k in keep if component.get(k) is not None}
+    payload: dict[str, Any] = {
+        k: str(component.get(k)) for k in keep if component.get(k) is not None
+    }
+    # CATEGORIES may repeat and each line may hold several words. Kept as one flat list,
+    # because the policy context matches fixed-meeting markers against them.
+    categories = component.get("CATEGORIES")
+    if categories is not None:
+        lines = categories if isinstance(categories, list) else [categories]
+        payload["CATEGORIES"] = [str(word) for line in lines for word in line.cats]
+    return payload
 
 
-def parse(path: Path, window_start: dt.datetime, window_end: dt.datetime) -> Iterator[RawEvent]:
+def parse(
+    path: Path,
+    window_start: dt.datetime,
+    window_end: dt.datetime,
+    *,
+    dropped: Dropped | None = None,
+) -> Iterator[RawEvent]:
     """Yield one RawEvent per occurrence falling inside the window.
 
     The window is required rather than optional. An .ics file can contain a series with no end
     date, and expanding one of those without a bound does not terminate.
+
+    ``dropped``, when given, is filled with a count of every row refused and why. Without it
+    the refusals are still logged, but nobody is counting.
     """
+    counter = dropped if dropped is not None else Dropped()
     calendar = Calendar.from_ical(path.read_bytes())
 
     masters: list[Any] = []
@@ -142,6 +193,7 @@ def parse(path: Path, window_start: dt.datetime, window_end: dt.datetime) -> Ite
     for component in calendar.walk("VEVENT"):
         uid = str(component.get("UID", "")).strip()
         if not uid:
+            counter.note("no_uid", uid)
             continue
         recurrence_id = _as_aware_utc(getattr(component.get("RECURRENCE-ID"), "dt", None))
         if recurrence_id is not None:
@@ -150,16 +202,25 @@ def parse(path: Path, window_start: dt.datetime, window_end: dt.datetime) -> Ite
             masters.append(component)
 
     for component in masters:
-        yield from _expand(component, overrides, window_start, window_end)
+        yield from _expand(component, overrides, window_start, window_end, counter)
 
     # An override whose original instant fell outside the window still belongs in the window it
     # was MOVED to. Dropping these loses real meetings.
     for (uid, original), component in overrides.items():
         starts_at = _as_aware_utc(getattr(component.get("DTSTART"), "dt", None))
-        if starts_at is None or not (window_start <= starts_at < window_end):
+        if starts_at is None:
+            counter.note("all_day_or_floating", uid)
+            continue
+        if not (window_start <= starts_at < window_end):
             continue
         event = _build(
-            component, uid, starts_at, series_id=uid, is_exception=True, original=original
+            component,
+            uid,
+            starts_at,
+            counter,
+            series_id=uid,
+            is_exception=True,
+            original=original,
         )
         if event is not None:
             yield event
@@ -170,6 +231,7 @@ def _expand(
     overrides: dict[tuple[str, dt.datetime], Any],
     window_start: dt.datetime,
     window_end: dt.datetime,
+    dropped: Dropped,
 ) -> Iterator[RawEvent]:
     """Expand one VEVENT into the occurrences that fall inside the window."""
     uid = str(component.get("UID", "")).strip()
@@ -177,8 +239,14 @@ def _expand(
     # own timezone, and only the resulting instants are converted.
     start = _as_aware(getattr(component.get("DTSTART"), "dt", None))
     end = _as_aware(getattr(component.get("DTEND"), "dt", None))
-    if start is None or end is None:
+    if start is None:
         # All-day or floating. Skipped on purpose; see the module docstring.
+        dropped.note("all_day_or_floating", uid)
+        return
+    if end is None:
+        # A start with no usable end. RFC 5545 lets DTEND be omitted, but a meeting with no end
+        # cannot answer "does it overlap", so it is refused rather than given a made-up length.
+        dropped.note("no_end", uid)
         return
 
     duration = end - start
@@ -187,7 +255,12 @@ def _expand(
     if rrule_value is None:
         if window_start <= start < window_end:
             event = _build(
-                component, uid, start.astimezone(dt.UTC), series_id=None, is_exception=False
+                component,
+                uid,
+                start.astimezone(dt.UTC),
+                dropped,
+                series_id=None,
+                is_exception=False,
             )
             if event is not None:
                 yield event
@@ -197,8 +270,9 @@ def _expand(
     rule = rrulestr(rrule_value.to_ical().decode(), dtstart=start)
 
     for local_occurrence in rule.between(window_start, window_end, inc=True):
-        # dateutil keeps the tzinfo and advances the LOCAL fields, so 10:00 stays 10:00 across
-        # a DST boundary. Converting here, after expansion, is what makes that correct.
+        # dateutil keeps the tzinfo and advances the LOCAL fields, so the wall-clock time stays
+        # the same across a DST boundary. Converting here, after expansion, is what makes that
+        # correct.
         occurrence = local_occurrence.astimezone(dt.UTC)
         if occurrence in excluded:
             continue
@@ -210,6 +284,7 @@ def _expand(
             component,
             uid,
             occurrence,
+            dropped,
             series_id=uid,
             is_exception=False,
             duration=duration,
@@ -237,20 +312,32 @@ def _build(
     component: Any,
     uid: str,
     starts_at: dt.datetime,
+    dropped: Dropped,
     *,
     series_id: str | None,
     is_exception: bool,
     duration: dt.timedelta | None = None,
     original: dt.datetime | None = None,
 ) -> RawEvent | None:
-    """Assemble one RawEvent, or None when the source data cannot support one."""
+    """Assemble one RawEvent, or None when the source data cannot support one.
+
+    Every None returned here is counted in ``dropped`` with its reason.
+    """
     if duration is None:
         end = _as_aware_utc(getattr(component.get("DTEND"), "dt", None))
         start = _as_aware_utc(getattr(component.get("DTSTART"), "dt", None))
-        if end is None or start is None:
+        if start is None:
+            dropped.note("all_day_or_floating", uid)
+            return None
+        if end is None:
+            dropped.note("no_end", uid)
             return None
         duration = end - start
     if duration <= dt.timedelta(0):
+        # A DST spring-forward can collapse a real-looking meeting to a single instant, and a
+        # source can simply be wrong. Either way the database would refuse the row; refuse it
+        # here, with a count, instead of letting the constraint be the messenger.
+        dropped.note("zero_length", uid)
         return None
 
     payload = _raw_payload(component)

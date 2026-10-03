@@ -30,8 +30,15 @@ class ModelReply:
 
 @dataclass(frozen=True)
 class Step:
+    """One entry in a run's trace.
+
+    ``policy`` steps are the gate's decisions on a proposed write: ``tool_name`` is the tool
+    that proposed it, ``tool_input`` the action as the engine saw it, ``tool_output`` the
+    decision. They are recorded before the tool step that reports what was written.
+    """
+
     ordinal: int
-    kind: Literal["model", "tool"]
+    kind: Literal["model", "tool", "policy"]
     usage: Usage | None = None
     text: str | None = None
     tool_name: str | None = None

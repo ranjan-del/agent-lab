@@ -30,7 +30,52 @@ relative, not absolute.
 | Q2 | GiST index over `tstzrange(starts_at, ends_at, '[)')` (migration 0004) and the query written with `&&` | 11.0 ms, 3,311 buffers | 0.19 ms, 28 buffers | `before/q2.txt`, `after/q2-range-form.txt` |
 | Q10 | Same index, query written with `@>` | 10.2 ms | 0.08 ms, 5 buffers | `before/q10.txt`, `after/q10-range-form.txt` |
 | Q3 | No index. Rewrite: collect the person's meetings first (`MATERIALIZED` CTE), then sort that small set | 166 ms, temp files | 0.5 ms, 287 buffers | `before/q3.txt`, `after/q3-rewrite.txt` |
-| Q6 | Deferred: needs `CREATE EXTENSION pg_trgm` plus a GIN trigram index, a separate decision | 56 ms | | `before/q6.txt` |
+| Q6 | **Deferred, decided 30 Sep** (below): a GIN trigram index works, and nothing asks the question | 51 ms | 0.6 ms with the index, measured on a scratch copy and not shipped | `before/q6.txt`, `after/q6-trgm-gin-not-shipped.txt` |
+
+## Q6 and pg_trgm: deferred, with a trigger (decided 30 Sep)
+
+Measured on a scratch database (`agentlab_trgm_scratch`, dropped afterwards) loaded with
+`load.sql` at the drill's size, 100,000 meetings, median of seven runs each.
+
+| Measure | Without the index | With `gin (title gin_trgm_ops)` |
+|---|---|---|
+| Q6, `ILIKE '%budget review 42%'`, 139 rows | 50.6 ms, seq scan, 1,661 buffers | 0.6 ms, bitmap index scan, 90 buffers |
+| `ILIKE '%budget%'`, 12,500 rows | 45.2 ms | 9.1 ms, still reads every heap page |
+| `ILIKE '%42%'`, a two-character pattern | 44.0 ms | 42.1 ms, seq scan: a trigram needs three characters |
+| Index size, build time | | 3.3 MB on a 13 MB table, 0.26 s |
+| 10,000 meeting inserts | 165 ms | 269 ms, 63% slower |
+| Q6 at 5,000 meetings, no index | 2.5 ms | |
+
+The index does what it promises: about 80 times faster on a selective pattern. I am not adding it,
+because nothing issues the query. `read_calendar_window` selects by time span through the GiST
+index, `search_transcripts` is vector search over chunks, and `write_tasks` writes by id; no tool,
+endpoint or prompt filters meetings by title. And 100,000 meetings is twenty times my real
+calendar: ten meetings a working day for two years is about 5,000 rows, where the unindexed scan
+is 2.5 ms. An index nothing reads is a 63% tax on every ingest, paid for a question nobody asks.
+
+Rejected alternative: adopt it now, in the migration after 0007, so the drill closes with every
+slow query fixed. That buys a number on this page and costs the ingest path, the extension, and
+a query shape (`ILIKE` over `title`) the code would then have to preserve. The other rejected
+alternative, full-text search (`to_tsvector` on `title`), does not answer Q6 at all: it matches
+words, not substrings, so "budget review 42" would not find "Budget review 4217".
+
+**Trigger to revisit:** a tool or endpoint that filters meetings by a substring of the title
+(for example "find my meeting called X") lands, **and** that query measures over 10 ms at the
+real row count. Then the follow-up is one migration with exactly this DDL, and nothing else:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX ix_meetings_title_trgm ON meetings USING gin (title gin_trgm_ops);
+-- downgrade: DROP INDEX ix_meetings_title_trgm; DROP EXTENSION pg_trgm;
+```
+
+Hybrid retrieval in W8 does not trip this trigger: its lexical half is ranked full-text search
+over transcript chunks, a different column and a different operator.
+
+One thing the rerun found, unrelated to Q6: on this load `count(DISTINCT starts_at)` on
+`meetings` is 1 again, so the planner has folded the `WHERE g = g` correlation away and gotcha
+3 below is back. Titles do not depend on it, so the Q6 numbers stand; the window queries' numbers do
+not, and the loader needs a real per-row `random()` before they are rerun.
 
 ## Three things worth remembering
 

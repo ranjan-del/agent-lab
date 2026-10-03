@@ -37,9 +37,13 @@ def test_simple_event_normalises_times_attendees_and_rooms(tmp_path: Path) -> No
     assert not by_email["sriram@example.com"].is_resource
 
 
-def test_all_day_events_are_skipped(tmp_path: Path) -> None:
+def test_all_day_events_are_skipped_and_counted(tmp_path: Path) -> None:
     """A date with no time cannot overlap a focus block, so it is not a meeting."""
-    assert _parse(tmp_path, ics_fixtures.ALL_DAY) == []
+    path = tmp_path / "cal.ics"
+    path.write_text(ics_fixtures.ALL_DAY)
+    dropped = ics.Dropped()
+    assert list(ics.parse(path, WINDOW_START, WINDOW_END, dropped=dropped)) == []
+    assert dropped.all_day_or_floating == 1
 
 
 def test_recurrence_expands_to_one_event_per_occurrence(tmp_path: Path) -> None:
@@ -98,13 +102,28 @@ def test_a_meeting_starting_in_the_spring_gap_is_one_hour_not_two(tmp_path: Path
     assert event.ends_at - event.starts_at == dt.timedelta(hours=1)
 
 
-def test_a_meeting_that_collapses_to_zero_in_the_spring_gap_is_dropped(tmp_path: Path) -> None:
+def test_a_meeting_that_collapses_to_zero_in_the_spring_gap_is_dropped_and_counted(
+    tmp_path: Path,
+) -> None:
     """02:30 to 03:30 across the jump is the same instant twice, and cannot be stored.
 
-    Characterisation, not endorsement: the parser drops it silently, the same way it drops an
-    event with no DTEND. A count of skipped events would make this visible; see the log.
+    Dropping it is right. Dropping it SILENTLY was the W1 debt: the count is what makes the
+    loss visible to whoever reads the ingest output.
     """
-    assert "spring-gap-collapsed" not in _parse_year(tmp_path, ics_fixtures.DST_BOUNDARY_NIGHTS)
+    path = tmp_path / "cal.ics"
+    path.write_text(ics_fixtures.DST_BOUNDARY_NIGHTS)
+    dropped = ics.Dropped()
+    events = list(
+        ics.parse(
+            path,
+            dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+            dt.datetime(2027, 1, 1, tzinfo=dt.UTC),
+            dropped=dropped,
+        )
+    )
+    assert "spring-gap-collapsed" not in {e.external_id.rsplit("_", 1)[0] for e in events}
+    assert dropped.zero_length == 1
+    assert dropped.total == 1
 
 
 def test_exdate_removes_an_occurrence_and_recurrence_id_moves_one(tmp_path: Path) -> None:
@@ -158,3 +177,42 @@ def test_a_naive_or_backwards_event_is_refused_loudly() -> None:
             starts_at=dt.datetime(2026, 9, 1, 11, 0, tzinfo=dt.UTC),
             ends_at=dt.datetime(2026, 9, 1, 10, 0, tzinfo=dt.UTC),
         )
+
+
+def test_parse_counts_every_row_it_refuses_by_reason(tmp_path: Path) -> None:
+    """Four rows dropped for four different reasons, one kept, and the caller can see all five.
+
+    Before this test the parser returned one event and said nothing about the other four. The
+    W4 eval harness will count meetings; if ingestion loses rows without a number, every one of
+    those counts is wrong in a way nobody can detect from the output.
+    """
+    path = tmp_path / "cal.ics"
+    path.write_text(ics_fixtures.DROPPED_MIX)
+    dropped = ics.Dropped()
+
+    events = list(ics.parse(path, WINDOW_START, WINDOW_END, dropped=dropped))
+
+    assert [e.title for e in events] == ["The one that survives"]
+    assert dropped.no_uid == 1
+    assert dropped.all_day_or_floating == 1
+    assert dropped.no_end == 1
+    assert dropped.zero_length == 1
+    assert dropped.total == 4
+
+
+def test_parse_without_a_counter_still_works(tmp_path: Path) -> None:
+    """The counter is opt-in. Callers that do not care are not forced to change."""
+    assert len(_parse(tmp_path, ics_fixtures.DROPPED_MIX)) == 1
+
+
+def test_categories_are_kept_in_raw_as_a_list_of_words(tmp_path: Path) -> None:
+    """The policy context matches fixed-meeting markers against ICS categories, so keep them."""
+    body = ics_fixtures.SIMPLE.replace(
+        "SUMMARY:Design review\n",
+        "SUMMARY:Design review\nCATEGORIES:Important,Client\nCATEGORIES:Fixed\n",
+    )
+    (event,) = _parse(tmp_path, body)
+    assert event.raw["CATEGORIES"] == ["Important", "Client", "Fixed"]
+
+    (plain,) = _parse(tmp_path, ics_fixtures.SIMPLE)
+    assert "CATEGORIES" not in plain.raw

@@ -11,7 +11,7 @@ import datetime as dt
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,8 @@ DEFAULT_TZ = "Asia/Kolkata"
 
 
 class SearchTranscriptsArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(min_length=1, description="What to look for: a topic, a promise, a name.")
     start: dt.datetime | None = Field(
         default=None, description="Only transcripts captured at or after this instant."

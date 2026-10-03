@@ -34,6 +34,14 @@ def as_event(step: Step) -> dict[str, Any]:
             "text": step.text,
             "tokens": {"in": usage.input_tokens, "out": usage.output_tokens} if usage else None,
         }
+    if step.kind == "policy":
+        return {
+            "event": "policy_decision",
+            **base,
+            "tool": step.tool_name,
+            "action": step.tool_input,
+            "decision": step.tool_output,
+        }
     return {
         "event": "tool_finished",
         **base,

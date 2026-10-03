@@ -2,6 +2,8 @@
 
 Returns data, never prose: the meetings, the load per day, and the free slots inside working
 hours. The model turns that into advice; this function only reports what the calendar holds.
+Working hours are the ``working_hours`` policy row, passed in by the caller, never a constant
+here, so the slots offered and the rule the gate enforces are the same numbers.
 """
 
 from __future__ import annotations
@@ -10,20 +12,21 @@ import datetime as dt
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from agent_lab.agent.policy.rules import DailyWindow
 from agent_lab.models import Meeting
 
 DEFAULT_TZ = "Asia/Kolkata"
-WORK_START = dt.time(10, 0)
-WORK_END = dt.time(19, 0)
 MIN_SLOT = dt.timedelta(minutes=30)
 
 
 class CalendarWindowArgs(BaseModel):
     """What the model must supply: an aware start and end. Everything else has a default."""
+
+    model_config = ConfigDict(extra="forbid")
 
     start: dt.datetime
     end: dt.datetime
@@ -33,7 +36,7 @@ class CalendarWindowArgs(BaseModel):
     @classmethod
     def _aware(cls, value: dt.datetime) -> dt.datetime:
         if value.tzinfo is None:
-            raise ValueError("must be timezone-aware, e.g. 2026-09-08T10:00:00+05:30")
+            raise ValueError("must be timezone-aware, e.g. 2026-09-08T14:30:00+05:30")
         return value
 
     @model_validator(mode="after")
@@ -43,7 +46,9 @@ class CalendarWindowArgs(BaseModel):
         return self
 
 
-def read_calendar_window(session: Session, args: CalendarWindowArgs) -> dict[str, Any]:
+def read_calendar_window(
+    session: Session, args: CalendarWindowArgs, *, working_hours: DailyWindow
+) -> dict[str, Any]:
     tz = ZoneInfo(args.timezone)
     # Written with the range operator on purpose: that is the form the GiST span index
     # serves (docs/explain/README.md). The two-comparison form sequential-scans.
@@ -83,7 +88,9 @@ def read_calendar_window(session: Session, args: CalendarWindowArgs) -> dict[str
         },
         "meetings": meetings,
         "load_per_day": load,
-        "free_slots": _free_slots(args.start.astimezone(tz), args.end.astimezone(tz), by_day, tz),
+        "free_slots": _free_slots(
+            args.start.astimezone(tz), args.end.astimezone(tz), by_day, tz, working_hours
+        ),
     }
 
 
@@ -92,13 +99,19 @@ def _free_slots(
     end: dt.datetime,
     by_day: dict[dt.date, list[tuple[dt.datetime, dt.datetime]]],
     tz: ZoneInfo,
+    working_hours: DailyWindow,
 ) -> list[dict[str, str]]:
-    """Gaps of at least MIN_SLOT inside working hours, per local day in the window."""
+    """Gaps of at least MIN_SLOT inside working hours, per local day in the window.
+
+    Every day in the window is scanned, as before; the row's ``days`` are not applied here.
+    """
     slots: list[dict[str, str]] = []
     day = start.date()
     while day < end.date():
-        work_start = dt.datetime.combine(day, WORK_START, tzinfo=tz)
-        work_end = dt.datetime.combine(day, WORK_END, tzinfo=tz)
+        # The window is wall-clock time in the row's own zone, reported in the caller's.
+        zone = working_hours.zone
+        work_start = dt.datetime.combine(day, working_hours.start, tzinfo=zone).astimezone(tz)
+        work_end = dt.datetime.combine(day, working_hours.end, tzinfo=zone).astimezone(tz)
         cursor = work_start
         for m_start, m_end in sorted(by_day.get(day, [])):
             if m_start - cursor >= MIN_SLOT:

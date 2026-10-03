@@ -140,3 +140,40 @@ SUMMARY:Exactly the missing hour
 END:VEVENT
 END:VCALENDAR
 """
+
+# One event of every kind the parser refuses, plus one it keeps. The point of the fixture is
+# the COUNT: a parser that drops four of five rows and prints "1 occurrence" is lying by
+# omission, and every eval number downstream inherits the lie.
+DROPPED_MIX = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+DTSTART:20260903T040000Z
+DTEND:20260903T043000Z
+SUMMARY:No UID at all
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-allday
+DTSTART;VALUE=DATE:20260904
+DTEND;VALUE=DATE:20260905
+SUMMARY:All day
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-no-end
+DTSTART:20260905T040000Z
+SUMMARY:Never given an end
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-zero
+DTSTART:20260906T040000Z
+DTEND:20260906T040000Z
+SUMMARY:Zero length
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-kept
+DTSTART:20260907T040000Z
+DTEND:20260907T043000Z
+SUMMARY:The one that survives
+END:VEVENT
+END:VCALENDAR
+"""

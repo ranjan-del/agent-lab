@@ -211,3 +211,47 @@ def test_the_system_prompt_is_the_first_message_on_every_model_call() -> None:
     for call in model.seen_messages:
         assert call[0] == {"role": "system", "content": "You are the calendar agent."}
         assert call[1] == {"role": "user", "content": "hello"}
+
+
+def test_steps_a_tool_emits_while_running_are_recorded_before_its_own_step() -> None:
+    """The policy gate decides inside the write tool; its decisions land in the trace, in
+    order, before the tool step that reports what was written."""
+    from pydantic import BaseModel
+
+    from agent_lab.agent.tools import Tool
+    from agent_lab.agent.types import Step
+
+    class NoArgs(BaseModel):
+        pass
+
+    pending: list[Step] = []
+
+    def write(_: NoArgs) -> str:
+        pending.append(Step(ordinal=0, kind="policy", tool_name="write", tool_output={"n": 1}))
+        pending.append(Step(ordinal=0, kind="policy", tool_name="write", tool_output={"n": 2}))
+        return "written"
+
+    def drain() -> list[Step]:
+        out = list(pending)
+        pending.clear()
+        return out
+
+    tool = Tool(name="write", description="", args_model=NoArgs, fn=write)
+    model = ScriptedModel(
+        [
+            ModelReply(
+                text=None, tool_calls=(ToolCall(name="write", arguments={}),), usage=Usage(1, 1)
+            ),
+            ModelReply(text="ok", tool_calls=(), usage=Usage(1, 1)),
+        ]
+    )
+    seen: list[Step] = []
+
+    result = run(
+        task="write", model=model, tools=[tool], max_steps=3, on_step=seen.append, drain=drain
+    )
+
+    assert [s.kind for s in result.steps] == ["model", "policy", "policy", "tool", "model"]
+    assert [s.ordinal for s in result.steps] == [1, 2, 3, 4, 5]
+    assert [s.tool_output for s in result.steps[1:3]] == [{"n": 1}, {"n": 2}]
+    assert seen == result.steps

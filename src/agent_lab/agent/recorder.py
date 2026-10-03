@@ -58,6 +58,9 @@ def finish_run(
     cost = cost_usd(result.steps, model_name)
     run.cost_usd = None if cost is None else float(cost)
     run.latency_ms = int((finished_at - run.started_at).total_seconds() * 1000)
+    refusal = first_refusal(result.steps)
+    if refusal is not None:
+        run.policy_id, run.refusal_reason = refusal
     for step in result.steps:
         session.add(
             RunStep(
@@ -65,8 +68,10 @@ def finish_run(
                 ordinal=step.ordinal,
                 kind=step.kind,
                 tool_name=step.tool_name,
-                input=_jsonable(step.tool_input) if step.kind == "tool" else {},
-                output=_jsonable(step.tool_output) if step.kind == "tool" else {"text": step.text},
+                input=_jsonable(step.tool_input) if step.kind != "model" else {},
+                output=(
+                    _jsonable(step.tool_output) if step.kind != "model" else {"text": step.text}
+                ),
                 tokens_in=step.usage.input_tokens if step.usage else None,
                 tokens_out=step.usage.output_tokens if step.usage else None,
                 latency_ms=step.latency_ms,
@@ -74,6 +79,22 @@ def finish_run(
         )
     session.flush()
     return run
+
+
+def first_refusal(steps: list[Step]) -> tuple[int | None, str] | None:
+    """(policy_id, reason) of the first REFUSE the gate recorded, or None.
+
+    The first, because it is the one the rest of the run reacted to. An ask is not a refusal:
+    it is held for approval, and the run's refusal columns stay empty for it. Every decision,
+    including later refusals, stays in run_steps.
+    """
+    for step in steps:
+        out = step.tool_output
+        if step.kind == "policy" and isinstance(out, dict) and out.get("outcome") == "refuse":
+            reason = f"{out.get('code')}: {out.get('reason', '')} {out.get('detail', '')}".strip()
+            policy_id = out.get("policy_id")
+            return (policy_id if isinstance(policy_id, int) else None), reason
+    return None
 
 
 def record_run(

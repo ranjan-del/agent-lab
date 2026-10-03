@@ -1,0 +1,13 @@
+SELECT id, title FROM meetings WHERE title ILIKE '%budget review 42%';
+
+Bitmap Heap Scan on meetings  (cost=133.98..171.78 rows=10 width=23) (actual time=0.443..0.545 rows=139 loops=1)
+  Recheck Cond: (title ~~* '%budget review 42%'::text)
+  Heap Blocks: exact=21
+  Buffers: shared hit=90
+  ->  Bitmap Index Scan on ix_meetings_title_trgm  (cost=0.00..133.98 rows=10 width=0) (actual time=0.435..0.435 rows=139 loops=1)
+        Index Cond: (title ~~* '%budget review 42%'::text)
+        Buffers: shared hit=69
+Planning:
+  Buffers: shared hit=154
+Planning Time: 0.444 ms
+Execution Time: 0.594 ms

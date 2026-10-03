@@ -248,7 +248,11 @@ class Policy(Base):
     """
 
     __tablename__ = "policies"
-    __table_args__ = (UniqueConstraint("code", name="uq_policies_code"),)
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_policies_code"),
+        CheckConstraint("kind IN ('hard', 'middle', 'soft')", name="ck_policies_kind"),
+        CheckConstraint("severity IN ('refuse', 'ask', 'advise')", name="ck_policies_severity"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -341,3 +345,16 @@ class Task(Base):
     )
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IdempotencyKey(Base):
+    """What a POST answered, keyed by the client's Idempotency-Key. Migration 0007."""
+
+    __tablename__ = "idempotency_keys"
+
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
